@@ -36,7 +36,7 @@ type Shot = {
   targetId: number;
   progress: number;
   startedAt: number;
-  destination?: Point;
+  destination: Point;
 };
 
 type Particle = Point & {
@@ -60,9 +60,12 @@ type SpecialPulse = TimedPoint & { kind: Exclude<TargetKind, 'normal'> };
 const clamp = (value: number, min: number, max: number): number =>
   Math.min(max, Math.max(min, Number.isFinite(value) ? value : min));
 
-const targetCenter = (target: Target, interpolation = 0): Point => ({
+const interpolatedTargetY = (target: Target, interpolation: number, frozen: boolean): number =>
+  target.y + target.speed * (clamp(interpolation, 0, 1) / 60) * (frozen ? 0.5 : 1);
+
+const targetCenter = (target: Target, interpolation = 0, frozen = false): Point => ({
   x: target.x + target.width / 2,
-  y: target.y + target.height / 2 + target.speed * (clamp(interpolation, 0, 1) / 60),
+  y: interpolatedTargetY(target, interpolation, frozen) + target.height / 2,
 });
 
 const specialColor = (kind: TargetKind): string => {
@@ -89,11 +92,14 @@ export class CanvasRenderer {
   private readonly knownTargets = new Map<number, Point>();
   private errorStartedAt = Number.NEGATIVE_INFINITY;
   private levelUp: { level: number; startedAt: number } | null = null;
+  private presentationTime = 0;
+  private lastWallTime: number | null = null;
+  private lastRenderedPhase: GameSnapshot['phase'] | null = null;
 
   constructor(
     private readonly canvas: HTMLCanvasElement,
     private readonly settings: GameSettings,
-    private readonly now: () => number = () => performance.now(),
+    private readonly clock: () => number = () => performance.now(),
   ) {
     const context = canvas.getContext('2d');
     if (!context) throw new Error('Canvas 2D context is unavailable');
@@ -119,66 +125,63 @@ export class CanvasRenderer {
   };
 
   consume(events: readonly GameEvent[]): void {
-    const currentTime = this.now();
+    const currentTime = this.advancePresentationClock(this.lastRenderedPhase ?? 'playing');
     this.prune(currentTime);
 
     for (const event of events) {
-      if (event.type === 'shot') {
-        this.pushBounded(this.shots, {
-          targetId: event.targetId,
-          progress: event.progress,
-          startedAt: currentTime,
-          destination: this.knownTargets.get(event.targetId),
-        }, MAX_SHOTS);
-        continue;
-      }
-
-      if (event.type === 'error') {
-        this.errorStartedAt = currentTime;
-        continue;
-      }
-
-      if (event.type === 'destroyed') {
-        const center = targetCenter(event.target);
-        this.knownTargets.set(event.target.id, center);
-        this.addExplosion(center, currentTime);
-        continue;
-      }
-
-      if (event.type === 'breach') {
-        const center = targetCenter(event.target);
-        this.knownTargets.set(event.target.id, center);
-        this.pushBounded(this.breaches, { ...center, startedAt: currentTime }, MAX_BREACHES);
-        continue;
-      }
-
-      if (event.type === 'level-up') {
-        this.levelUp = { level: event.level, startedAt: currentTime };
-        continue;
-      }
-
-      for (const targetId of event.affectedIds) {
-        const point = this.knownTargets.get(targetId);
-        if (point) {
-          this.pushBounded(
-            this.specialPulses,
-            { ...point, kind: event.kind, startedAt: currentTime },
-            MAX_SPECIAL_PULSES,
-          );
+      switch (event.type) {
+        case 'shot': {
+          const point = this.knownTargets.get(event.targetId) ?? { x: SHIP_X, y: 260 };
+          this.pushBounded(this.shots, {
+            targetId: event.targetId,
+            progress: event.progress,
+            startedAt: currentTime,
+            destination: { ...point },
+          }, MAX_SHOTS);
+          break;
         }
-      }
+        case 'error':
+          this.errorStartedAt = currentTime;
+          break;
+        case 'destroyed':
+          this.addExplosion(targetCenter(event.target), currentTime);
+          break;
+        case 'breach':
+          this.pushBounded(this.breaches, { ...targetCenter(event.target), startedAt: currentTime }, MAX_BREACHES);
+          break;
+        case 'level-up':
+          this.levelUp = { level: event.level, startedAt: currentTime };
+          break;
+        case 'special':
+          for (const targetId of event.affectedIds) {
+            const point = this.knownTargets.get(targetId);
+            if (point) {
+              this.pushBounded(
+                this.specialPulses,
+                { ...point, kind: event.kind, startedAt: currentTime },
+                MAX_SPECIAL_PULSES,
+              );
+            }
+          }
+          break;
+        default:
+          // Runtime callers can bypass TypeScript's GameEvent union; malformed events are cosmetic no-ops.
+          break;
+        }
     }
   }
 
   render(snapshot: GameSnapshot, interpolation: number): void {
-    const currentTime = this.now();
+    const currentTime = this.advancePresentationClock(snapshot.phase);
+    this.lastRenderedPhase = snapshot.phase;
     this.prune(currentTime);
+    const frozen = snapshot.freezeRemainingMs > 0;
+    const currentTargets = new Map<number, Point>();
     for (const target of snapshot.targets) {
-      this.knownTargets.set(target.id, targetCenter(target, interpolation));
+      currentTargets.set(target.id, targetCenter(target, interpolation, frozen));
     }
-    for (const shot of this.shots) {
-      shot.destination ??= this.knownTargets.get(shot.targetId);
-    }
+    this.knownTargets.clear();
+    for (const [id, point] of currentTargets) this.knownTargets.set(id, point);
 
     const context = this.context;
     context.save();
@@ -192,10 +195,10 @@ export class CanvasRenderer {
 
     const locked = snapshot.targets.find(({ id }) => id === snapshot.lockedTargetId);
     for (const target of snapshot.targets) {
-      if (target.id !== snapshot.lockedTargetId) this.drawTarget(target, interpolation, false);
+      if (target.id !== snapshot.lockedTargetId) this.drawTarget(target, interpolation, frozen, false);
     }
-    if (locked) this.drawLockConnector(locked, interpolation);
-    if (locked) this.drawTarget(locked, interpolation, true);
+    if (locked) this.drawLockConnector(locked, interpolation, frozen);
+    if (locked) this.drawTarget(locked, interpolation, frozen, true);
 
     this.drawProjectiles(currentTime);
     this.drawExplosions(currentTime);
@@ -236,6 +239,20 @@ export class CanvasRenderer {
       (_, index) => makeParticle(index, shardCount, 62 + (index % 3) * 12, 7),
     );
     this.pushBounded(this.explosions, { ...center, startedAt, particles, shards }, MAX_EXPLOSIONS);
+  }
+
+  private advancePresentationClock(phase: GameSnapshot['phase']): number {
+    const wallTime = this.clock();
+    if (!Number.isFinite(wallTime)) return this.presentationTime;
+    if (this.lastWallTime === null) {
+      this.lastWallTime = wallTime;
+      return this.presentationTime;
+    }
+
+    const elapsed = Math.max(0, wallTime - this.lastWallTime);
+    this.lastWallTime = Math.max(this.lastWallTime, wallTime);
+    if (phase !== 'paused') this.presentationTime += elapsed;
+    return this.presentationTime;
   }
 
   private prune(currentTime: number): void {
@@ -330,8 +347,8 @@ export class CanvasRenderer {
     this.context.globalAlpha = 1;
   }
 
-  private drawLockConnector(target: Target, interpolation: number): void {
-    const center = targetCenter(target, interpolation);
+  private drawLockConnector(target: Target, interpolation: number, frozen: boolean): void {
+    const center = targetCenter(target, interpolation, frozen);
     this.context.strokeStyle = '#4be7ff80';
     this.context.lineWidth = 1;
     this.context.beginPath();
@@ -340,8 +357,8 @@ export class CanvasRenderer {
     this.context.stroke();
   }
 
-  private drawTarget(target: Target, interpolation: number, locked: boolean): void {
-    const y = target.y + target.speed * (clamp(interpolation, 0, 1) / 60);
+  private drawTarget(target: Target, interpolation: number, frozen: boolean, locked: boolean): void {
+    const y = interpolatedTargetY(target, interpolation, frozen);
     const center = { x: target.x + target.width / 2, y: y + target.height / 2 };
     const coreColor = specialColor(target.kind);
     this.context.save();
@@ -428,7 +445,7 @@ export class CanvasRenderer {
 
   private drawProjectiles(currentTime: number): void {
     for (const shot of this.shots) {
-      const destination = shot.destination ?? { x: SHIP_X, y: 260 };
+      const destination = shot.destination;
       const progress = clamp((currentTime - shot.startedAt) / PROJECTILE_MS, 0, 1);
       const eased = 1 - (1 - progress) ** 2;
       const x = SHIP_X + (destination.x - SHIP_X) * eased;

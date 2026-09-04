@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { PROJECTILE_MS } from '../game/config';
-import type { GameSettings, GameSnapshot, Target } from '../game/types';
+import type { GameEvent, GameSettings, GameSnapshot, Target } from '../game/types';
 import { CanvasRenderer } from './canvas-renderer';
 
 type RecordedCall = {
@@ -9,6 +9,7 @@ type RecordedCall = {
   fillStyle: string;
   strokeStyle: string;
   globalAlpha: number;
+  lineWidth: number;
 };
 
 class RecordingContext {
@@ -41,6 +42,7 @@ class RecordingContext {
       fillStyle: String(this.fillStyle),
       strokeStyle: String(this.strokeStyle),
       globalAlpha: this.globalAlpha,
+      lineWidth: this.lineWidth,
     });
   }
 
@@ -146,6 +148,9 @@ describe('CanvasRenderer', () => {
     expect(canvas.height).toBe(1600);
     expect(canvas.style.aspectRatio).toBe('480 / 800');
     expect(context.calls.filter(({ op }) => op === 'setTransform').at(-1)?.args).toEqual([2, 0, 0, 2, 0, 0]);
+    renderer.resize();
+    expect(context.calls.filter(({ op }) => op === 'setTransform').slice(-2).map(({ args }) => args))
+      .toEqual([[2, 0, 0, 2, 0, 0], [2, 0, 0, 2, 0, 0]]);
     Object.defineProperty(window, 'devicePixelRatio', { configurable: true, value: originalDpr });
   });
 
@@ -178,6 +183,27 @@ describe('CanvasRenderer', () => {
     expect(connectorIndex).toBeLessThan(lockedIndex);
   });
 
+  it('layers projectiles and explosions ahead of the ship, with warnings drawn last', () => {
+    const { context, renderer } = harness();
+    renderer.render(snapshot({ targets: [target()] }), 0);
+    renderer.consume([
+      { type: 'shot', targetId: 1, progress: 1 },
+      { type: 'destroyed', target: target() },
+      { type: 'error' },
+    ]);
+    context.calls.length = 0;
+    renderer.render(snapshot({ targets: [target()] }), 0);
+
+    const projectileIndex = context.calls.findIndex(({ op, fillStyle }) => op === 'fill' && fillStyle === '#ffbd66');
+    const explosionIndex = context.calls.findIndex(({ op, strokeStyle }) => op === 'stroke' && strokeStyle === '#fff3d6');
+    const shipIndex = context.calls.findIndex(({ op, fillStyle }) => op === 'fill' && fillStyle === '#082f46');
+    const warningIndex = context.calls.findIndex(({ op, strokeStyle }) => op === 'strokeRect' && strokeStyle === '#ff385c');
+
+    expect(projectileIndex).toBeLessThan(explosionIndex);
+    expect(explosionIndex).toBeLessThan(shipIndex);
+    expect(shipIndex).toBeLessThan(warningIndex);
+  });
+
   it('creates an 80ms projectile without mutating the immediate model snapshot', () => {
     expect(PROJECTILE_MS).toBe(80);
     const { context, renderer, setNow } = harness();
@@ -193,6 +219,18 @@ describe('CanvasRenderer', () => {
     setNow(1_081);
     renderer.render(state, 0);
     expect(context.calls.some(({ op, fillStyle }) => op === 'fill' && fillStyle === '#ffbd66')).toBe(false);
+  });
+
+  it('timestamps a post-frame projectile at event time instead of the previous rendered frame', () => {
+    const { context, renderer, setNow } = harness();
+    const state = snapshot({ targets: [target()] });
+    renderer.render(state, 0);
+    setNow(1_100);
+    renderer.consume([{ type: 'shot', targetId: 1, progress: 1 }]);
+    setNow(1_150);
+    renderer.render(state, 0);
+
+    expect(context.calls.some(({ op, fillStyle }) => op === 'fill' && fillStyle === '#ffbd66')).toBe(true);
   });
 
   it('turns a destroyed event into one decaying flash, ring, shards, and bounded particles', () => {
@@ -236,11 +274,151 @@ describe('CanvasRenderer', () => {
     ]);
     renderer.render(snapshot(), 0);
 
-    expect(context.calls.filter(({ op }) => op === 'translate').every(({ args }) => args[0] === 0 && args[1] === 0)).toBe(true);
+    expect(context.calls.filter(({ op }) => op === 'translate')).toHaveLength(0);
     const whiteFlash = context.calls.find(({ op, fillStyle }) => op === 'fillRect' && fillStyle === '#ffffff');
     expect(whiteFlash?.globalAlpha).toBeLessThanOrEqual(0.15);
     expect(context.calls.filter(({ op, fillStyle }) => op === 'fill' && fillStyle === '#78efff')).toHaveLength(4);
     expect(context.calls.some(({ op, strokeStyle }) => op === 'strokeRect' && strokeStyle === '#ff385c')).toBe(true);
+  });
+
+  it('shakes for a normal error but keeps the reduced-motion warning border static', () => {
+    const normal = harness();
+    normal.renderer.consume([{ type: 'error' }]);
+    normal.renderer.render(snapshot(), 0);
+    expect(normal.context.calls.some(({ op, args }) => op === 'translate' && (args[0] !== 0 || args[1] !== 0))).toBe(true);
+
+    const reduced = harness(true);
+    reduced.renderer.consume([{ type: 'error' }]);
+    reduced.renderer.render(snapshot(), 0);
+    const firstBorder = reduced.context.calls.find(({ op, strokeStyle }) => op === 'strokeRect' && strokeStyle === '#ff385c');
+    reduced.context.calls.length = 0;
+    reduced.setNow(1_060);
+    reduced.renderer.render(snapshot(), 0);
+    const secondBorder = reduced.context.calls.find(({ op, strokeStyle }) => op === 'strokeRect' && strokeStyle === '#ff385c');
+
+    expect(reduced.context.calls.filter(({ op }) => op === 'translate')).toHaveLength(0);
+    expect([secondBorder?.lineWidth, secondBorder?.globalAlpha]).toEqual([firstBorder?.lineWidth, firstBorder?.globalAlpha]);
+  });
+
+  it('keeps active effects at the same age while paused, then resumes their remaining lifetime', () => {
+    const { context, renderer, setNow } = harness();
+    renderer.consume([
+      { type: 'shot', targetId: 1, progress: 1 },
+      { type: 'destroyed', target: target() },
+      { type: 'level-up', level: 2 },
+      { type: 'breach', target: target({ y: 720 }) },
+      { type: 'error' },
+    ]);
+    const playing = snapshot({ targets: [target()] });
+    renderer.render(playing, 0);
+    const initialProjectile = context.calls.find(({ op, fillStyle }) => op === 'arc' && fillStyle === '#ffbd66');
+    const initialLevel = context.calls.find(({ op, args }) => op === 'fillText' && args[0] === 'LEVEL 2');
+    const initialExplosion = context.calls.find(({ op, strokeStyle }) => op === 'arc' && strokeStyle === '#fff3d6');
+    const initialBreach = context.calls.find(({ op, strokeStyle }) => op === 'arc' && strokeStyle === '#ff385c');
+    const initialShake = context.calls.find(({ op }) => op === 'translate');
+    context.calls.length = 0;
+
+    setNow(11_000);
+    renderer.render(snapshot({ ...playing, phase: 'paused' }), 0);
+    const pausedProjectile = context.calls.find(({ op, fillStyle }) => op === 'arc' && fillStyle === '#ffbd66');
+    const pausedLevel = context.calls.find(({ op, args }) => op === 'fillText' && args[0] === 'LEVEL 2');
+    const pausedExplosion = context.calls.find(({ op, strokeStyle }) => op === 'arc' && strokeStyle === '#fff3d6');
+    const pausedBreach = context.calls.find(({ op, strokeStyle }) => op === 'arc' && strokeStyle === '#ff385c');
+    const pausedShake = context.calls.find(({ op }) => op === 'translate');
+
+    expect(pausedProjectile?.args).toEqual(initialProjectile?.args);
+    expect(pausedLevel?.globalAlpha).toBe(initialLevel?.globalAlpha);
+    expect(pausedExplosion?.args).toEqual(initialExplosion?.args);
+    expect(pausedBreach?.args).toEqual(initialBreach?.args);
+    expect(pausedShake?.args).toEqual(initialShake?.args);
+
+    context.calls.length = 0;
+    setNow(11_040);
+    renderer.render(playing, 0);
+    const resumedProjectile = context.calls.find(({ op, fillStyle }) => op === 'arc' && fillStyle === '#ffbd66');
+    expect(resumedProjectile).toBeDefined();
+    expect(resumedProjectile?.args).not.toEqual(initialProjectile?.args);
+    expect(context.calls.some(({ op, args }) => op === 'fillText' && args[0] === 'LEVEL 2')).toBe(true);
+    expect(context.calls.some(({ op, strokeStyle }) => op === 'arc' && strokeStyle === '#fff3d6')).toBe(true);
+    expect(context.calls.some(({ op, strokeStyle }) => op === 'arc' && strokeStyle === '#ff385c')).toBe(true);
+
+    context.calls.length = 0;
+    setNow(11_081);
+    renderer.render(playing, 0);
+    expect(context.calls.some(({ op, fillStyle }) => op === 'arc' && fillStyle === '#ffbd66')).toBe(false);
+  });
+
+  it('does not rewind effect timing when the injected wall clock moves backward', () => {
+    const { context, renderer, setNow } = harness();
+    renderer.consume([{ type: 'error' }]);
+    renderer.render(snapshot(), 0);
+    context.calls.length = 0;
+
+    setNow(1_050);
+    renderer.render(snapshot(), 0);
+    const advancedBorder = context.calls.find(({ op, strokeStyle }) => op === 'strokeRect' && strokeStyle === '#ff385c');
+    context.calls.length = 0;
+
+    setNow(1_020);
+    renderer.render(snapshot(), 0);
+    const regressedBorder = context.calls.find(({ op, strokeStyle }) => op === 'strokeRect' && strokeStyle === '#ff385c');
+    context.calls.length = 0;
+
+    setNow(1_100);
+    renderer.render(snapshot(), 0);
+    const recoveredBorder = context.calls.find(({ op, strokeStyle }) => op === 'strokeRect' && strokeStyle === '#ff385c');
+
+    expect(regressedBorder?.globalAlpha).toBe(advancedBorder?.globalAlpha);
+    expect(recoveredBorder?.globalAlpha).toBeCloseTo(0.25 + (1 - 100 / 120) * 0.55);
+  });
+
+  it('uses half-speed target interpolation while freeze remains active', () => {
+    const normal = harness();
+    normal.renderer.render(snapshot({ targets: [target({ speed: 60 })] }), 1);
+    const normalY = textCalls(normal.context).find(({ args }) => args[0] === 'ORBIT')?.args[2] as number;
+
+    const frozen = harness();
+    frozen.renderer.render(snapshot({ freezeRemainingMs: 1, targets: [target({ speed: 60 })] }), 1);
+    const frozenY = textCalls(frozen.context).find(({ args }) => args[0] === 'ORBIT')?.args[2] as number;
+
+    expect(normalY - frozenY).toBeCloseTo(0.5);
+  });
+
+  it('replaces known target positions with the current active snapshot over a long run', () => {
+    const { renderer } = harness();
+    for (let id = 1; id <= 250; id += 1) {
+      renderer.render(snapshot({ targets: [target({ id })] }), 0);
+    }
+
+    const cachedTargets = (renderer as unknown as { knownTargets: Map<number, unknown> }).knownTargets;
+    expect(cachedTargets.size).toBe(1);
+  });
+
+  it('does not retain a removed target just to resolve a later special pulse', () => {
+    const { context, renderer } = harness();
+    renderer.render(snapshot({ targets: [target()] }), 0);
+    renderer.render(snapshot(), 0);
+    renderer.consume([{ type: 'special', kind: 'freeze', affectedIds: [1] }]);
+    context.calls.length = 0;
+    renderer.render(snapshot(), 0);
+
+    expect(context.calls.some(({ op, strokeStyle }) => op === 'stroke' && strokeStyle === '#82dfff')).toBe(false);
+  });
+
+  it('keeps special-pulse coordinates after the target cache is replaced', () => {
+    const { context, renderer } = harness();
+    renderer.render(snapshot({ targets: [target({ x: 120 })] }), 0);
+    renderer.consume([{ type: 'special', kind: 'freeze', affectedIds: [1] }]);
+    context.calls.length = 0;
+    renderer.render(snapshot({ targets: [target({ x: 280 })] }), 0);
+
+    const pulse = context.calls.find(({ op, strokeStyle }) => op === 'arc' && strokeStyle === '#82dfff');
+    expect(pulse?.args.slice(0, 2)).toEqual([170, 178]);
+  });
+
+  it('ignores an unknown runtime event without attempting special-event fields', () => {
+    const { renderer } = harness();
+    expect(() => renderer.consume([{ type: 'unknown' }] as unknown as GameEvent[])).not.toThrow();
   });
 
   it('bounds secondary effects independently so shots survive particle pressure', () => {
