@@ -244,6 +244,7 @@ describe('AppShell game screens', () => {
       specialHintRemainingMs: 0,
     }));
     expect(hint?.hidden).toBe(true);
+    expect(hint?.textContent).toBe('');
   });
 
   it('synchronizes the shield progress value and accessibility value on every render', () => {

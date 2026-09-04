@@ -311,9 +311,11 @@ export class GameModel implements GameModelTestApi {
         this.moveTargets(0, freezeFactor);
         continue;
       }
+      const tutorialActiveBeforeMove = this.targets.some(({ tutorial }) => tutorial);
       this.moveTargets(segmentMs, freezeFactor);
       this.activeMs += segmentMs;
-      this.spawnElapsedMs += segmentMs;
+      if (tutorialActiveBeforeMove && !this.targets.some(({ tutorial }) => tutorial)) this.spawnElapsedMs = 0;
+      else this.spawnElapsedMs += segmentMs;
       this.freezeRemainingMs = Math.max(0, this.freezeExpiresAtActiveMs - this.activeMs);
       this.comboBrokenRemainingMs = Math.max(0, this.comboBrokenRemainingMs - segmentMs);
       this.specialHintRemainingMs = Math.max(0, this.specialHintRemainingMs - segmentMs);

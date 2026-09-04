@@ -321,12 +321,17 @@ describe('CanvasRenderer', () => {
 
   it('draws a red battlefield-edge pulse for the nearest eligible normal threat', () => {
     const { context, renderer } = harness();
+    const state = snapshot({
+      lockedTargetId: 2,
+      targets: [target({ id: 2, y: 640 }), target({ id: 1, y: 500 })],
+    });
+    const before = structuredClone(state);
 
-    renderer.render(snapshot({
-      targets: [target({ y: 500 }), target({ id: 2, y: 640 })],
-    }), 0);
+    renderer.render(state, 0);
 
     expect(context.calls.some(({ op, strokeStyle }) => op === 'strokeRect' && strokeStyle === '#ff385c')).toBe(true);
+    expect(state.lockedTargetId).toBe(before.lockedTargetId);
+    expect(state.targets.map(({ id }) => id)).toEqual(before.targets.map(({ id }) => id));
   });
 
   it('shows special labels and brief level-up and breach defense feedback without changing state', () => {

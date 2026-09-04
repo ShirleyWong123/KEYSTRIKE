@@ -145,6 +145,8 @@ describe('fixed-step browser runtime', () => {
     expect(renderer.consume).toHaveBeenCalledOnce();
     expect(audio.consume).toHaveBeenCalledOnce();
     expect(shell.consume).toHaveBeenCalledOnce();
+    expect(consumedByRenderer).toHaveLength(1);
+    expect(consumedByAudio).toHaveLength(1);
     expect(shell.consume).toHaveBeenCalledWith(consumedByRenderer[0]);
     expect(consumedByRenderer[0]).toBe(consumedByAudio[0]);
     expect(shell.consume.mock.calls[0]?.[0]).toBe(consumedByRenderer[0]);

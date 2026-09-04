@@ -92,6 +92,23 @@ describe('GameModel lifecycle', () => {
     expect(model.snapshot().targets.some(({ tutorial }) => !tutorial)).toBe(true);
   });
 
+  it('starts normal spawn cadence only after a breached tutorial resolves', () => {
+    const model = new GameModel(new TargetManager(() => 0), {
+      autoSpawn: true,
+      spawnTarget: ({ kind = 'normal' }) => target({ id: 2, word: 'spawned', kind, speed: 0 }),
+    });
+    model.start(settings());
+    model.beginCombat();
+    model.injectTarget(target({ id: 1, tutorial: true, y: 660, height: 20, speed: 40 }));
+
+    model.update(1_000);
+    expect(model.snapshot()).toMatchObject({ missedWords: 1, targets: [] });
+    model.update(2_799);
+    expect(model.snapshot().targets).toHaveLength(0);
+    model.update(1);
+    expect(model.snapshot().targets).toHaveLength(1);
+  });
+
   it('uses the target manager measurement for the complete tutorial label', () => {
     const measured = { width: 116, height: 42 };
     const manager = new TargetManager(() => 0.5, () => measured);
@@ -193,6 +210,18 @@ describe('GameModel input and scoring', () => {
     expect(model.snapshot()).toMatchObject({ wrongKeys: 1, comboBrokenRemainingMs: 180 });
     model.update(180);
     expect(model.snapshot().comboBrokenRemainingMs).toBe(0);
+  });
+
+  it('freezes combo-break snapshot feedback while paused', () => {
+    const model = combatModel();
+    model.injectTarget(target({ id: 33, word: 'a' }));
+    model.handleKey('a');
+    model.handleKey('x');
+    model.pause();
+
+    model.update(1_000);
+
+    expect(model.snapshot().comboBrokenRemainingMs).toBe(180);
   });
 
   it('removes a completed target immediately and awards completion points before growing combo', () => {
