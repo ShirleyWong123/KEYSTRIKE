@@ -165,6 +165,19 @@ describe('AppShell game screens', () => {
     expect(root.textContent).toContain('65%');
   });
 
+  it('synchronizes the shield progress value and accessibility value on every render', () => {
+    const { root, shell } = setup();
+    const shield = root.querySelector<HTMLProgressElement>('[data-hud="shield"]')!;
+
+    shell.render(resultSnapshot({ phase: 'playing', shield: 60 }));
+    expect(shield.value).toBe(60);
+    expect(shield.getAttribute('aria-valuenow')).toBe('60');
+
+    shell.render(resultSnapshot({ phase: 'paused', shield: 25 }));
+    expect(shield.value).toBe(25);
+    expect(shield.getAttribute('aria-valuenow')).toBe('25');
+  });
+
   it('moves focus into pause and restores it to the game surface on continue', () => {
     const { root, model, shell } = setup();
     root.querySelector<HTMLButtonElement>('[data-action="start"]')!.click();
@@ -324,5 +337,18 @@ describe('short-height layout', () => {
 
     expect(styles).toContain('@media (max-height: 720px) and (min-width: 1040px)');
     expect(styles).toContain('@media (max-height: 720px) and (max-width: 1039px)');
+  });
+
+  it('keeps the detached HUD viewport-relative and outside the portrait battlefield', () => {
+    const styles = readFileSync(resolve(process.cwd(), 'src/styles.css'), 'utf8');
+    const wideStart = styles.indexOf('@media (max-height: 720px) and (min-width: 1040px)');
+    const narrowStart = styles.indexOf('@media (max-height: 720px) and (max-width: 1039px)');
+    const wideRules = styles.slice(wideStart, narrowStart);
+    const narrowRules = styles.slice(narrowStart, styles.indexOf('@media (prefers-reduced-motion', narrowStart));
+
+    expect(wideRules).toMatch(/\.game-frame\s*{[^}]*filter:\s*none;/s);
+    expect(wideRules).toMatch(/\.hud\s*{[^}]*position:\s*fixed;[^}]*left:\s*16px;/s);
+    expect(narrowRules).toMatch(/\.hud\s*{[^}]*position:\s*static;[^}]*width:\s*100%;/s);
+    expect(styles).toContain('aspect-ratio: 480 / 800');
   });
 });

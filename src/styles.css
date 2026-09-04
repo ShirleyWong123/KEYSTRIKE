@@ -512,6 +512,10 @@ canvas {
 }
 
 @media (max-height: 720px) and (min-width: 1040px) {
+  .game-frame {
+    filter: none;
+  }
+
   .hud {
     position: fixed;
     top: 12px;

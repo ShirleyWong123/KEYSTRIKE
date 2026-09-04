@@ -335,6 +335,7 @@ export class AppShell {
     this.setText('[data-hud="shield-text"]', `${snapshot.shield}%`);
     const shield = this.required<HTMLProgressElement>('[data-hud="shield"]');
     shield.value = snapshot.shield;
+    shield.setAttribute('aria-valuenow', String(snapshot.shield));
     shield.classList.toggle('is-critical', snapshot.shield <= 40);
   }
 
