@@ -54,6 +54,16 @@ describe('GameModel lifecycle', () => {
     expect(model.snapshot()).toMatchObject({ phase: 'playing', activeMs: 0 });
   });
 
+  it('consumes only the countdown remainder when an update crosses into combat', () => {
+    const model = new GameModel();
+    model.start(settings());
+
+    model.update(3_001);
+
+    expect(model.snapshot()).toMatchObject({ phase: 'playing', activeMs: 1 });
+    expect(model.snapshot().targets[0]?.y).toBeCloseTo(-36 + 28 * 0.7 * 0.001, 8);
+  });
+
   it('restarts the selected difficulty and returns to a cleared menu', () => {
     const model = combatModel('hard');
     model.injectTarget(target({ id: 9, word: 'z' }));
@@ -165,6 +175,28 @@ describe('GameModel input and scoring', () => {
     expect(model.drainEvents()).toEqual([]);
   });
 
+  it('ignores malformed runtime key values without throwing', () => {
+    const model = combatModel();
+    const before = model.snapshot();
+
+    for (const value of [null, undefined, 42, true, [], {}, { key: null }, { key: 7 }, { repeat: false }]) {
+      expect(() => model.handleKey(value as never)).not.toThrow();
+    }
+
+    expect(model.snapshot()).toEqual(before);
+    expect(model.drainEvents()).toEqual([]);
+  });
+
+  it('isolates snapshot targets from authoritative model state', () => {
+    const model = combatModel();
+    model.injectTarget(target({ id: 9, word: 'pulse' }));
+    const snapshot = model.snapshot();
+    snapshot.targets[0]!.word = 'changed';
+    snapshot.targets[0]!.typed = 4;
+
+    expect(model.snapshot().targets[0]).toMatchObject({ word: 'ORBIT', typed: 0 });
+  });
+
   it('uses Escape as the only pause key and ignores letters while paused', () => {
     const model = combatModel();
     model.injectTarget(target({ id: 8, word: 'p' }));
@@ -209,5 +241,46 @@ describe('GameModel breaches', () => {
     model.update(1_000);
 
     expect(model.snapshot()).toMatchObject({ phase: 'gameover', shield: 0, missedWords: 5 });
+  });
+
+  it('counts and emits every simultaneous breach after shield reaches zero', () => {
+    const model = combatModel();
+    for (let id = 30; id < 38; id += 1) {
+      model.injectTarget(target({ id, word: `word${id}`.replace(/[0-9]/g, 'a'), y: 700, height: 20, speed: 40 }));
+    }
+
+    model.update(1_000);
+
+    const events = model.drainEvents().filter((event) => event.type === 'breach');
+    expect(model.snapshot()).toMatchObject({ phase: 'gameover', shield: 0, missedWords: 8 });
+    expect(events).toHaveLength(8);
+    expect(events.map((event) => event.type === 'breach' && event.target.id)).toEqual([30, 31, 32, 33, 34, 35, 36, 37]);
+  });
+
+  it('isolates drained breach and destroyed event targets from model and sibling payloads', () => {
+    const model = combatModel();
+    model.injectTarget(target({ id: 40, word: 'a' }));
+    model.injectTarget(target({ id: 43, word: 'b' }));
+    model.handleKey('a');
+    model.handleKey('b');
+    const destroyed = model.drainEvents();
+    const destroyedEvents = destroyed.filter((event) => event.type === 'destroyed');
+    const destroyedTarget = destroyedEvents[0]!;
+    if (destroyedTarget.type === 'destroyed') destroyedTarget.target.word = 'mutated';
+
+    model.injectTarget(target({ id: 41, word: 'b', y: 700, height: 20, speed: 40 }));
+    model.injectTarget(target({ id: 42, word: 'c', y: 700, height: 20, speed: 40 }));
+    model.update(1_000);
+    const breached = model.drainEvents();
+    const breachEvents = breached.filter((event) => event.type === 'breach');
+    const breachTarget = breachEvents[0]!;
+    if (breachTarget.type === 'breach') breachTarget.target.word = 'mutated';
+
+    expect(model.snapshot().targets.find(({ id }) => id === 41)).toBeUndefined();
+    expect(model.snapshot().targets.find(({ id }) => id === 42)).toBeUndefined();
+    expect(destroyedEvents[1]).toMatchObject({ type: 'destroyed', target: { id: 43, word: 'b' } });
+    expect(breachEvents[1]).toMatchObject({ type: 'breach', target: { id: 42, word: 'c' } });
+    expect(destroyedTarget.type === 'destroyed' && destroyedTarget.target.word).toBe('mutated');
+    expect(breachTarget.type === 'breach' && breachTarget.target.word).toBe('mutated');
   });
 });

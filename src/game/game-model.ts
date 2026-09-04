@@ -80,7 +80,9 @@ export class GameModel implements GameModelTestApi {
   }
 
   handleKey(input: string | KeyInput): void {
+    if (input === null || (typeof input !== 'string' && typeof input !== 'object')) return;
     const keyInput = typeof input === 'string' ? { key: input } : input;
+    if (typeof keyInput.key !== 'string') return;
     if (keyInput.repeat || keyInput.altKey || keyInput.ctrlKey || keyInput.metaKey) return;
 
     if (keyInput.key === 'Escape' || keyInput.key === 'Esc') {
@@ -96,15 +98,16 @@ export class GameModel implements GameModelTestApi {
   update(deltaMs: number): void {
     if (!isValidDelta(deltaMs)) return;
     if (this.phase === 'countdown') {
-      this.advanceCountdown(deltaMs);
+      const countdownDelta = Math.min(deltaMs, this.countdownRemainingMs);
+      this.advanceCountdown(countdownDelta);
+      const combatDelta = deltaMs - countdownDelta;
+      if (this.countdownRemainingMs > 0 || combatDelta === 0) return;
+      this.advancePlaying(combatDelta);
       return;
     }
     if (this.phase !== 'playing') return;
 
-    this.activeMs += deltaMs;
-    const movement = this.targetManager.update(this.targets, deltaMs, 1);
-    this.targets = movement.active;
-    for (const breached of movement.breached) this.applyBreach(breached);
+    this.advancePlaying(deltaMs);
   }
 
   pause(): void {
@@ -214,6 +217,13 @@ export class GameModel implements GameModelTestApi {
     this.score += LETTER_SCORE;
     this.events.push({ type: 'shot', targetId: locked.id, progress: locked.typed });
     if (locked.typed === locked.word.length) this.completeTarget(locked);
+  }
+
+  private advancePlaying(deltaMs: number): void {
+    this.activeMs += deltaMs;
+    const movement = this.targetManager.update(this.targets, deltaMs, 1);
+    this.targets = movement.active;
+    for (const breached of movement.breached) this.applyBreach(breached);
   }
 
   private findAndLock(letter: string): Target | null {
