@@ -381,6 +381,19 @@ describe('AppShell game screens', () => {
     }
   });
 
+  it('reserves full-width result rows for Breaches and Reached level only', () => {
+    const { root, shell } = setup();
+
+    shell.render(resultSnapshot());
+
+    const fullWidthMetrics = [...root.querySelectorAll<HTMLElement>('.results-grid > .results-grid-wide')];
+    expect(fullWidthMetrics.map((metric) => metric.querySelector('dt')?.textContent?.trim())).toEqual([
+      'Breaches',
+      'Reached level',
+    ]);
+    expect(root.querySelector('[data-result="errors"]')?.closest('div')?.classList).not.toContain('results-grid-wide');
+  });
+
   it('displays zero accuracy and WPM when no input was recorded', () => {
     const { root, shell } = setup();
 
