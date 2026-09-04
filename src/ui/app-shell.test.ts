@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { AudioEngine } from '../audio/audio-engine';
 import { GameModel } from '../game/game-model';
 import type { GameSnapshot } from '../game/types';
@@ -154,6 +156,52 @@ describe('AppShell game screens', () => {
     expect(document.activeElement).toBe(shell.canvas);
   });
 
+  it('restores focus when update observes an Escape-driven resume', () => {
+    const { root, model, shell } = setup();
+    root.querySelector<HTMLButtonElement>('[data-action="start"]')!.click();
+    model.beginCombat();
+    model.handleKey({ key: 'Escape' });
+    shell.update();
+    expect(document.activeElement).toBe(root.querySelector('[data-action="continue"]'));
+
+    model.handleKey({ key: 'Escape' });
+    shell.update();
+
+    expect(model.snapshot().phase).toBe('playing');
+    expect(document.activeElement).toBe(shell.canvas);
+  });
+
+  it.each([
+    { screen: 'pause', enter: (model: GameModel) => model.pause(), actions: ['continue', 'restart', 'menu'] },
+    { screen: 'results', enter: undefined, actions: ['restart', 'menu'] },
+  ] as const)('contains Tab focus within the $screen dialog', ({ screen, enter, actions }) => {
+    const { root, model, shell } = setup();
+    root.querySelector<HTMLButtonElement>('[data-action="start"]')!.click();
+    model.beginCombat();
+    if (enter) {
+      enter(model);
+      shell.update();
+    } else {
+      shell.update(resultSnapshot());
+    }
+    const dialog = root.querySelector<HTMLElement>(`[data-screen="${screen}"]`)!;
+    const buttons = actions.map((action) => dialog.querySelector<HTMLButtonElement>(`[data-action="${action}"]`)!);
+    const first = buttons[0]!;
+    const last = buttons.at(-1)!;
+
+    last.focus();
+    key(last, 'Tab');
+    expect(document.activeElement).toBe(first);
+
+    first.focus();
+    first.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true }));
+    expect(document.activeElement).toBe(last);
+
+    shell.canvas.focus();
+    key(shell.canvas, 'Tab');
+    expect(dialog.contains(document.activeElement)).toBe(true);
+  });
+
   it('supports restart and menu actions from the pause dialog', () => {
     const { root, model, shell } = setup();
     root.querySelector<HTMLInputElement>('input[value="hard"]')!.click();
@@ -201,5 +249,14 @@ describe('AppShell game screens', () => {
     const results = root.querySelector<HTMLElement>('[data-screen="results"]')!;
     expect(results.textContent).toContain('0%');
     expect(results.textContent).toContain('0 WPM');
+  });
+});
+
+describe('short-height layout', () => {
+  it('only detaches the HUD when the viewport is wide enough for a side column', () => {
+    const styles = readFileSync(resolve(process.cwd(), 'src/styles.css'), 'utf8');
+
+    expect(styles).toContain('@media (max-height: 720px) and (min-width: 1040px)');
+    expect(styles).toContain('@media (max-height: 720px) and (max-width: 1039px)');
   });
 });

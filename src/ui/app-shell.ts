@@ -82,6 +82,7 @@ export class AppShell {
 
     this.bindMenu();
     this.bindActions();
+    this.bindDialogFocus();
     this.bindFocusState();
     this.audio.setEnabled(this.settings.soundEnabled);
     this.render(this.model.snapshot());
@@ -277,6 +278,28 @@ export class AppShell {
     }
   }
 
+  private bindDialogFocus(): void {
+    this.root.addEventListener('keydown', (event) => {
+      if (event.key !== 'Tab') return;
+      const dialog = [this.pauseDialog, this.resultsDialog].find(({ hidden }) => !hidden);
+      if (!dialog) return;
+      const controls = [...dialog.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      )];
+      const first = controls[0];
+      const last = controls.at(-1);
+      if (!first || !last) return;
+
+      const focused = document.activeElement;
+      const leavingStart = event.shiftKey && focused === first;
+      const leavingEnd = !event.shiftKey && focused === last;
+      if (!dialog.contains(focused) || leavingStart || leavingEnd) {
+        event.preventDefault();
+        (event.shiftKey ? last : first).focus();
+      }
+    });
+  }
+
   private startRun(): void {
     this.saveSettings();
     this.audio.setEnabled(this.settings.soundEnabled);
@@ -334,6 +357,10 @@ export class AppShell {
       this.resultsDialog.querySelector<HTMLButtonElement>('[data-action="restart"]')?.focus();
       return;
     }
+    if (phase === 'playing' && this.lastPhase === 'paused') {
+      this.canvas.focus();
+      return;
+    }
     if (phase === 'menu') this.radios().find(({ checked }) => checked)?.focus();
   }
 
@@ -351,4 +378,3 @@ export class AppShell {
     return element;
   }
 }
-

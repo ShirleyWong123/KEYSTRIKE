@@ -21,6 +21,8 @@ const validScore = (value: unknown): number => {
 
 /** A fail-open browser-storage boundary: persistence failures never block play. */
 export class StorageAdapter {
+  private readonly highScores = new Map<Difficulty, number>();
+
   constructor(
     private readonly storage: Storage | null,
     private readonly systemReducedMotion: boolean,
@@ -47,10 +49,14 @@ export class StorageAdapter {
   }
 
   loadHighScore(difficulty: Difficulty): number {
+    const inMemory = this.highScores.get(difficulty) ?? 0;
     try {
-      return validScore(this.storage?.getItem(this.highScoreKey(difficulty)));
+      const persisted = validScore(this.storage?.getItem(this.highScoreKey(difficulty)));
+      const highScore = Math.max(inMemory, persisted);
+      this.highScores.set(difficulty, highScore);
+      return highScore;
     } catch {
-      return 0;
+      return inMemory;
     }
   }
 
@@ -58,6 +64,7 @@ export class StorageAdapter {
     const previous = this.loadHighScore(difficulty);
     const next = Math.max(previous, validScore(score));
     if (next === previous) return previous;
+    this.highScores.set(difficulty, next);
     try {
       this.storage?.setItem(this.highScoreKey(difficulty), String(next));
     } catch {
@@ -70,4 +77,3 @@ export class StorageAdapter {
     return `${HIGH_SCORE_PREFIX}${difficulty}`;
   }
 }
-

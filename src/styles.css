@@ -472,13 +472,7 @@ canvas {
   }
 
   .hud {
-    position: fixed;
-    top: 12px;
-    left: 16px;
-    width: min(300px, calc((100vw - 480px) / 2 - 24px));
-    min-width: 240px;
     grid-template-columns: repeat(3, 1fr);
-    border: 1px solid rgba(75, 231, 255, 0.3);
   }
 
   .shield-status {
@@ -497,6 +491,25 @@ canvas {
   .difficulty-copy {
     min-height: 86px;
     padding-top: 12px;
+  }
+}
+
+@media (max-height: 720px) and (min-width: 1040px) {
+  .hud {
+    position: fixed;
+    top: 12px;
+    left: 16px;
+    width: min(300px, calc((100vw - 480px) / 2 - 24px));
+    min-width: 240px;
+    border: 1px solid rgba(75, 231, 255, 0.3);
+  }
+}
+
+@media (max-height: 720px) and (max-width: 1039px) {
+  .hud {
+    position: static;
+    width: 100%;
+    min-width: 0;
   }
 }
 

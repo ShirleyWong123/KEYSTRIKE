@@ -85,4 +85,29 @@ describe('StorageAdapter high scores', () => {
     expect(adapter.loadHighScore('normal')).toBe(0);
     expect(adapter.loadHighScore('hard')).toBe(0);
   });
+
+  it('keeps a monotonic high score in memory when storage is unavailable', () => {
+    const adapter = new StorageAdapter(null, false);
+
+    expect(adapter.saveHighScore('easy', 1_000)).toBe(1_000);
+    expect(adapter.saveHighScore('easy', 500)).toBe(1_000);
+    expect(adapter.loadHighScore('easy')).toBe(1_000);
+  });
+
+  it('keeps a monotonic high score and does not repeat failed writes', () => {
+    let writeAttempts = 0;
+    const throwing = {
+      getItem: () => { throw new Error('blocked read'); },
+      setItem: () => {
+        writeAttempts += 1;
+        throw new Error('blocked write');
+      },
+    } as unknown as Storage;
+    const adapter = new StorageAdapter(throwing, false);
+
+    expect(adapter.saveHighScore('hard', 1_000)).toBe(1_000);
+    expect(adapter.saveHighScore('hard', 500)).toBe(1_000);
+    expect(adapter.loadHighScore('hard')).toBe(1_000);
+    expect(writeAttempts).toBe(1);
+  });
 });
