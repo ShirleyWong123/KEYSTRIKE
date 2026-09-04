@@ -419,9 +419,35 @@ describe('AudioEngine', () => {
 
     engine.resumeFromGesture();
     await settleUnlock();
-    engine.consume([{ type: 'error' }]);
     expect(context.resumed).toBe(2);
     expect(context.sources).toHaveLength(3);
+    engine.consume([{ type: 'error' }]);
+    expect(context.sources).toHaveLength(4);
+  });
+
+  it('freezes a pending hit and reschedules the remaining projectile delay on gesture resume', async () => {
+    const context = new FakeAudioContext();
+    const engine = new AudioEngine({ contextFactory: () => context, random: () => 0.5 });
+    engine.unlock();
+    await settleUnlock();
+    engine.consume([{ type: 'shot', targetId: 1, progress: 0 }]);
+    const originalHit = context.sources[1]!;
+
+    context.currentTime = 4.03;
+    engine.pausePresentation();
+    expect(originalHit.stops).toContain(4.03);
+    expect(originalHit.disconnected).toBe(true);
+
+    context.currentTime = 14.03;
+    engine.consume([{ type: 'error' }]);
+    expect(context.sources).toHaveLength(2);
+
+    engine.resumeFromGesture();
+    const resumedHit = context.sources[2]!;
+    expect(resumedHit.frequency.values[0]!.value).toBe(920);
+    expect((resumedHit.starts[0]! - context.currentTime) * 1_000)
+      .toBeCloseTo(PROJECTILE_MS - 30, 8);
+    expect(context.gains[2]!.gain.values[0]!.value).toBe(0.06);
   });
 
   it('clears scheduled presentation sources for restart or menu without closing the reusable context', async () => {
@@ -430,11 +456,15 @@ describe('AudioEngine', () => {
     await settleUnlock();
     engine.consume([{ type: 'shot', targetId: 1, progress: 0 }]);
     const context = contexts[0]!;
+    context.currentTime = 4.03;
+    engine.pausePresentation();
 
     engine.resetPresentation();
+    engine.resumeFromGesture();
 
     expect(context.sources.every((source) => source.stops.includes(context.currentTime))).toBe(true);
     expect(context.sources.every((source) => source.disconnected)).toBe(true);
+    expect(context.sources).toHaveLength(2);
     expect(context.closed).toBe(0);
   });
 

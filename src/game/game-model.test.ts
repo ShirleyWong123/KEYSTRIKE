@@ -606,6 +606,31 @@ describe('GameModel chronological progression', () => {
 });
 
 describe('GameModel label geometry over time', () => {
+  it('keeps the NOVA and quiet labels twelve pixels apart at exact 60Hz steps', () => {
+    const measured = (word: string) => ({ width: Math.max(74, word.length * 10 + 36), height: 42 });
+    const manager = new TargetManager(() => 0.34, measured);
+    const model = new GameModel(manager, { random: () => 0.34 });
+    model.start(settings('easy'));
+    model.beginCombat();
+    let observedPair = false;
+
+    for (let frame = 1; frame <= 600; frame += 1) {
+      model.update(1_000 / 60);
+      const nova = model.snapshot().targets.find(({ word }) => word === 'NOVA');
+      const quiet = model.snapshot().targets.find(({ word }) => word === 'quiet');
+      if (!nova || !quiet) continue;
+      observedPair = true;
+      const horizontallySeparated = nova.x + nova.width + 12 <= quiet.x
+        || quiet.x + quiet.width + 12 <= nova.x;
+      const front = nova.y >= quiet.y ? nova : quiet;
+      const trailing = front === nova ? quiet : nova;
+      const verticalGap = front.y - (trailing.y + trailing.height);
+      expect(horizontallySeparated || verticalGap >= 12, `frame ${frame} gap ${verticalGap}`).toBe(true);
+    }
+
+    expect(observedPair).toBe(true);
+  });
+
   it('preserves measured margins and gaps when random 0.34 spawns quiet behind tutorial NOVA', () => {
     const measured = (word: string) => ({ width: Math.max(74, word.length * 10 + 36), height: 42 });
     const manager = new TargetManager(() => 0.34, measured);

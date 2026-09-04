@@ -72,3 +72,47 @@ Result: exited 0 with no whitespace errors.
 ## Residual concern
 
 No known automated-test or build blocker remains. The changed audio timing and visual focus/impact presentation were not manually re-run across Chrome, Safari, and Firefox in this fix pass; existing browser-checklist claims were deliberately left unchanged.
+
+## Production-step follow-up
+
+Two remaining Important boundary findings were reproduced and corrected after the first final-fix commit.
+
+### Geometry RED/GREEN
+
+RED command:
+
+```text
+npm test -- src/game/game-model.test.ts -t "exact 60Hz"
+```
+
+Result: the deterministic `0.34` run failed at frame 175 with a computed `NOVA`/`quiet` gap of `11.999999999999996`; the next unconstrained 60Hz step would reduce it by another 0.14px. The earlier 250ms test did not expose this transition.
+
+The movement resolver now preserves established front-to-back ordering rather than reclassifying it from a strict floating-point gap, and clamps caught trajectories with a one-micro-pixel geometry epsilon. The same test then passed, and the focused model/manager suites passed 59/59 tests.
+
+### Paused impact RED/GREEN
+
+RED command:
+
+```text
+npm test -- src/audio/audio-engine.test.ts -t "freezes a pending hit"
+```
+
+Result: after pausing 30ms into an 80ms projectile, gesture resume created no replacement hit source.
+
+Audio now records the remaining delay for pending projectile hits before cancelling/suspending its source graph, then schedules only the remaining cue from `resumeFromGesture()`. Muting, reset, menu, restart, and disposal discard retained cues. Matching deterministic audio and renderer tests verify a 30ms pre-pause age, no hit during pause, and the same 50ms remaining delay after resume. The focused audio/renderer suites passed 52/52 tests.
+
+### Follow-up final verification
+
+```text
+npm test
+```
+
+Result: 10 test files passed; 170 tests passed.
+
+```text
+npm run typecheck
+npm run build
+git diff --check
+```
+
+Result: all exited 0; Vite transformed 14 modules and the diff check reported no whitespace errors.

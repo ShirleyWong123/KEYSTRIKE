@@ -407,6 +407,31 @@ describe('CanvasRenderer', () => {
     expect(context.calls.some(({ op, fillStyle }) => op === 'arc' && fillStyle === '#ffbd66')).toBe(false);
   });
 
+  it('preserves the same fifty milliseconds of projectile travel across pause and resume', () => {
+    const { context, renderer, setNow } = harness();
+    const playing = snapshot({ targets: [target()] });
+    renderer.render(playing, 0);
+    renderer.consume([{ type: 'shot', targetId: 1, progress: 1 }]);
+
+    setNow(1_030);
+    context.calls.length = 0;
+    renderer.render(playing, 0);
+    const beforePause = context.calls.find(({ op, fillStyle }) => op === 'arc' && fillStyle === '#ffbd66');
+
+    setNow(9_030);
+    context.calls.length = 0;
+    renderer.render(snapshot({ ...playing, phase: 'paused' }), 0);
+    const duringPause = context.calls.find(({ op, fillStyle }) => op === 'arc' && fillStyle === '#ffbd66');
+    expect(duringPause?.args).toEqual(beforePause?.args);
+
+    setNow(9_080);
+    context.calls.length = 0;
+    renderer.render(playing, 0);
+    const impact = context.calls.find(({ op, fillStyle }) => op === 'arc' && fillStyle === '#ff9d2e');
+    expect(impact?.args.slice(0, 2)).toEqual([170, 178]);
+    expect(context.calls.some(({ op, fillStyle }) => op === 'fill' && fillStyle === '#ffbd66')).toBe(false);
+  });
+
   it('does not rewind effect timing when the injected wall clock moves backward', () => {
     const { context, renderer, setNow } = harness();
     renderer.consume([{ type: 'error' }]);

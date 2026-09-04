@@ -7,6 +7,7 @@ export const CANVAS_HEIGHT = 800;
 export const DEFENSE_LINE = 720;
 export const HORIZONTAL_MARGIN = 16;
 export const LABEL_GAP = 12;
+const GEOMETRY_EPSILON = 1e-6;
 
 export interface WordMeasure {
   width: number;
@@ -119,9 +120,12 @@ export class TargetManager {
         const originalAhead = targets[ahead.index]!;
         const horizontallySeparated = entry.target.x + entry.target.width + LABEL_GAP <= ahead.target.x
           || ahead.target.x + ahead.target.width + LABEL_GAP <= entry.target.x;
-        const startedSafelyBehind = original.y + original.height + LABEL_GAP <= originalAhead.y;
-        if (!horizontallySeparated && startedSafelyBehind) {
-          entry.target.y = Math.min(entry.target.y, ahead.target.y - entry.target.height - LABEL_GAP);
+        const followsAhead = original.y < originalAhead.y - GEOMETRY_EPSILON;
+        if (!horizontallySeparated && followsAhead) {
+          entry.target.y = Math.min(
+            entry.target.y,
+            ahead.target.y - entry.target.height - LABEL_GAP - GEOMETRY_EPSILON,
+          );
         }
       }
       resolved.push(entry);

@@ -56,6 +56,17 @@ interface SourceRecord {
   gain: GainLike | null;
 }
 
+interface ScheduledHit {
+  record: SourceRecord;
+  frequency: number;
+  dueAt: number;
+}
+
+interface PausedHit {
+  frequency: number;
+  remainingSeconds: number;
+}
+
 const browserContextFactory = (): AudioContextLike | null => {
   const Context = (globalThis as typeof globalThis & {
     AudioContext?: new () => AudioContextLike;
@@ -83,6 +94,8 @@ export class AudioEngine {
   private disposed = false;
   private presentationPaused = false;
   private readonly activeSources = new Set<SourceRecord>();
+  private readonly scheduledHits: ScheduledHit[] = [];
+  private readonly pausedHits: PausedHit[] = [];
 
   constructor({ contextFactory = browserContextFactory, enabled = true, random = Math.random }: AudioEngineOptions = {}) {
     this.contextFactory = contextFactory;
@@ -121,14 +134,27 @@ export class AudioEngine {
 
   setEnabled(enabled: boolean): void {
     this.enabled = enabled;
-    if (!enabled) this.cancelAll(this.currentTime(this.context));
+    if (!enabled) {
+      this.pausedHits.length = 0;
+      this.cancelAll(this.currentTime(this.context));
+    }
   }
 
   pausePresentation(): void {
-    if (this.disposed) return;
+    if (this.disposed || this.presentationPaused) return;
     this.presentationPaused = true;
     const context = this.context;
-    this.cancelAll(this.currentTime(context));
+    const pausedAt = this.currentTime(context);
+    this.pausedHits.length = 0;
+    for (const hit of this.scheduledHits) {
+      if (hit.dueAt > pausedAt && this.activeSources.has(hit.record)) {
+        this.pausedHits.push({
+          frequency: hit.frequency,
+          remainingSeconds: hit.dueAt - pausedAt,
+        });
+      }
+    }
+    this.cancelAll(pausedAt);
     if (context) this.suspendSafely(context);
   }
 
@@ -141,11 +167,13 @@ export class AudioEngine {
       return;
     }
     this.resumeSafely(context);
+    this.resumePendingHits(context);
   }
 
   resetPresentation(): void {
     if (this.disposed) return;
     this.presentationPaused = false;
+    this.pausedHits.length = 0;
     this.cancelAll(this.currentTime(this.context));
   }
 
@@ -161,7 +189,7 @@ export class AudioEngine {
               const shotStart = this.currentTime(context);
               const shotPitch = 680 + (this.randomUnit() - 0.5) * 80;
               this.tone(context, 'sine', shotPitch, 0.12, 0.05, shotStart);
-              this.tone(context, 'sine', shotPitch + 240, 0.06, 0.045, shotStart + PROJECTILE_MS / 1000);
+              this.scheduleHit(context, shotPitch + 240, shotStart + PROJECTILE_MS / 1000);
             }
             break;
           case 'error':
@@ -200,6 +228,7 @@ export class AudioEngine {
     this.unlocked = false;
     this.unlockPending = false;
     this.unlockAttempt += 1;
+    this.pausedHits.length = 0;
     this.cancelAll(this.currentTime(context));
     if (context) this.closeSafely(context);
   }
@@ -211,7 +240,7 @@ export class AudioEngine {
     volume: number,
     duration: number,
     start = this.currentTime(context),
-  ): void {
+  ): SourceRecord | null {
     let record: SourceRecord | null = null;
     try {
       const source = context.createOscillator();
@@ -219,8 +248,24 @@ export class AudioEngine {
       source.type = type;
       source.frequency.setValueAtTime(frequency, start);
       this.schedule(context, record, volume, duration, start);
+      return this.activeSources.has(record) ? record : null;
     } catch {
       if (record) this.cancel(record, this.currentTime(context));
+      return null;
+    }
+  }
+
+  private scheduleHit(context: AudioContextLike, frequency: number, dueAt: number): void {
+    const record = this.tone(context, 'sine', frequency, 0.06, 0.045, dueAt);
+    if (record) this.scheduledHits.push({ record, frequency, dueAt });
+  }
+
+  private resumePendingHits(context: AudioContextLike): void {
+    const pending = this.pausedHits.splice(0);
+    if (!this.enabled || pending.length === 0) return;
+    const resumedAt = this.currentTime(context);
+    for (const hit of pending) {
+      this.scheduleHit(context, hit.frequency, resumedAt + hit.remainingSeconds);
     }
   }
 
@@ -290,6 +335,8 @@ export class AudioEngine {
 
   private cancel(record: SourceRecord, stopAt?: number): void {
     this.activeSources.delete(record);
+    const scheduledHit = this.scheduledHits.findIndex((hit) => hit.record === record);
+    if (scheduledHit >= 0) this.scheduledHits.splice(scheduledHit, 1);
     if (stopAt !== undefined) this.callSafely(() => record.source.stop(stopAt));
     this.callSafely(() => record.source.disconnect());
     if (record.gain) this.callSafely(() => record.gain?.disconnect());
