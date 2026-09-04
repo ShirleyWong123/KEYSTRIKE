@@ -119,7 +119,7 @@ const settleUnlock = async (): Promise<void> => {
 };
 
 type FaultStage = 'oscillator' | 'buffer-source' | 'gain' | 'buffer' | 'buffer-fill' | 'frequency'
-  | 'gain-param' | 'source-connect' | 'gain-connect' | 'start' | 'stop';
+  | 'gain-param' | 'gain-ramp' | 'source-connect' | 'gain-connect' | 'start' | 'stop';
 
 class FaultyAudioContext extends FakeAudioContext {
   fault: FaultStage | null = null;
@@ -149,6 +149,7 @@ class FaultyAudioContext extends FakeAudioContext {
     if (this.fault === 'gain') throw new Error('gain failed');
     const gain = super.createGain();
     gain.gain.throwOnSet = this.fault === 'gain-param';
+    gain.gain.throwOnRamp = this.fault === 'gain-ramp';
     gain.throwOnConnect = this.fault === 'gain-connect';
     return gain;
   }
@@ -160,6 +161,24 @@ class FaultyAudioContext extends FakeAudioContext {
       return { getChannelData: () => { throw new Error('buffer fill failed'); } } as unknown as AudioBuffer;
     }
     return buffer;
+  }
+}
+
+class AdvancingClockContext extends FakeAudioContext {
+  clockReads = 0;
+  private clock = 4;
+
+  constructor() {
+    super();
+    Object.defineProperty(this, 'currentTime', {
+      configurable: true,
+      get: () => {
+        this.clockReads += 1;
+        const value = this.clock;
+        this.clock += 1;
+        return value;
+      },
+    });
   }
 }
 
@@ -207,6 +226,24 @@ describe('AudioEngine', () => {
     expect(context.sources).toHaveLength(2);
     expect(context.sources.map((source) => source.starts[0])).toEqual([4, 4 + PROJECTILE_MS / 1000]);
     expect(context.gains.map((gain) => gain.gain.values[0]!.value)).toEqual([0.12, 0.06]);
+  });
+
+  it('uses one captured shot base time when the audio clock advances during scheduling', async () => {
+    const context = new AdvancingClockContext();
+    const engine = new AudioEngine({ contextFactory: () => context });
+    engine.unlock();
+    await settleUnlock();
+    engine.consume([{ type: 'shot', targetId: 1, progress: 0 }]);
+
+    expect(context.clockReads).toBe(1);
+    expect(context.sources.map((source) => source.frequency.values[0]!.at)).toEqual([
+      4,
+      4 + PROJECTILE_MS / 1000,
+    ]);
+    expect(context.sources.map((source) => source.starts[0])).toEqual([
+      4,
+      4 + PROJECTILE_MS / 1000,
+    ]);
   });
 
   it('uses distinct synthesized envelopes for error, explosion, level-up, and breach', async () => {
@@ -297,7 +334,7 @@ describe('AudioEngine', () => {
   });
 
   it.each<FaultStage>([
-    'oscillator', 'gain', 'frequency', 'gain-param', 'source-connect', 'gain-connect', 'start', 'stop',
+    'oscillator', 'gain', 'frequency', 'gain-param', 'gain-ramp', 'source-connect', 'gain-connect', 'start', 'stop',
   ])('contains %s failures and cleans up a partial tone graph', async (fault) => {
     const context = new FaultyAudioContext();
     context.fault = fault;

@@ -123,8 +123,11 @@ export class AudioEngine {
       try {
         switch (event.type) {
           case 'shot':
-            this.tone(context, 'sine', 680, 0.12, 0.05);
-            this.tone(context, 'sine', 920, 0.06, 0.045, PROJECTILE_MS / 1000);
+            {
+              const shotStart = this.currentTime(context);
+              this.tone(context, 'sine', 680, 0.12, 0.05, shotStart);
+              this.tone(context, 'sine', 920, 0.06, 0.045, shotStart + PROJECTILE_MS / 1000);
+            }
             break;
           case 'error':
             this.tone(context, 'sawtooth', 120, 0.16, 0.14);
@@ -167,21 +170,21 @@ export class AudioEngine {
     frequency: number,
     volume: number,
     duration: number,
-    delay = 0,
+    start = this.currentTime(context),
   ): void {
     let record: SourceRecord | null = null;
     try {
       const source = context.createOscillator();
       record = this.track(source);
       source.type = type;
-      source.frequency.setValueAtTime(frequency, this.currentTime(context) + delay);
-      this.schedule(context, record, volume, duration, delay);
+      source.frequency.setValueAtTime(frequency, start);
+      this.schedule(context, record, volume, duration, start);
     } catch {
       if (record) this.cancel(record, this.currentTime(context));
     }
   }
 
-  private noise(context: AudioContextLike, volume: number, duration: number): void {
+  private noise(context: AudioContextLike, volume: number, duration: number, start = this.currentTime(context)): void {
     let record: SourceRecord | null = null;
     try {
       const source = context.createBufferSource();
@@ -191,7 +194,7 @@ export class AudioEngine {
       const data = buffer.getChannelData(0);
       for (let index = 0; index < data.length; index += 1) data[index] = Math.random() * 2 - 1;
       source.buffer = buffer;
-      this.schedule(context, record, volume, duration);
+      this.schedule(context, record, volume, duration, start);
     } catch {
       if (record) this.cancel(record, this.currentTime(context));
     }
@@ -202,12 +205,11 @@ export class AudioEngine {
     record: SourceRecord,
     volume: number,
     duration: number,
-    delay = 0,
+    start: number,
   ): void {
     try {
       const gain = context.createGain();
       record.gain = gain;
-      const start = this.currentTime(context) + delay;
       const end = start + Math.min(duration, 1);
       gain.gain.setValueAtTime(volume, start);
       gain.gain.linearRampToValueAtTime(0.001, end);
