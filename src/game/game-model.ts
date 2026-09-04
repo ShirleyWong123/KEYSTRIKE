@@ -297,6 +297,7 @@ export class GameModel implements GameModelTestApi {
 
   private advancePlaying(deltaMs: number): void {
     let remainingMs = deltaMs;
+    let deferSpawnCadenceUntilNextUpdate = false;
     while (remainingMs > 0 && this.phase === 'playing') {
       this.processProgressionBoundaries();
       const freezeFactor = this.freezeExpiresAtActiveMs > this.activeMs ? 0.5 : 1;
@@ -308,13 +309,19 @@ export class GameModel implements GameModelTestApi {
         this.msUntilNextBreach(freezeFactor),
       );
       if (segmentMs === 0) {
+        const tutorialActiveBeforeMove = this.targets.some(({ tutorial }) => tutorial);
         this.moveTargets(0, freezeFactor);
+        if (tutorialActiveBeforeMove && !this.targets.some(({ tutorial }) => tutorial)) {
+          deferSpawnCadenceUntilNextUpdate = true;
+        }
         continue;
       }
       const tutorialActiveBeforeMove = this.targets.some(({ tutorial }) => tutorial);
       this.moveTargets(segmentMs, freezeFactor);
       this.activeMs += segmentMs;
-      if (tutorialActiveBeforeMove && !this.targets.some(({ tutorial }) => tutorial)) this.spawnElapsedMs = 0;
+      if (deferSpawnCadenceUntilNextUpdate || (tutorialActiveBeforeMove && !this.targets.some(({ tutorial }) => tutorial))) {
+        this.spawnElapsedMs = 0;
+      }
       else this.spawnElapsedMs += segmentMs;
       this.freezeRemainingMs = Math.max(0, this.freezeExpiresAtActiveMs - this.activeMs);
       this.comboBrokenRemainingMs = Math.max(0, this.comboBrokenRemainingMs - segmentMs);

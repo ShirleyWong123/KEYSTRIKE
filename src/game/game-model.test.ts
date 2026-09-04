@@ -99,7 +99,7 @@ describe('GameModel lifecycle', () => {
     });
     model.start(settings());
     model.beginCombat();
-    model.injectTarget(target({ id: 1, tutorial: true, y: 660, height: 20, speed: 40 }));
+    model.injectTarget(target({ id: 1, tutorial: true, y: 700, height: 20, speed: 40 }));
 
     model.update(1_000);
     expect(model.snapshot()).toMatchObject({ missedWords: 1, targets: [] });
