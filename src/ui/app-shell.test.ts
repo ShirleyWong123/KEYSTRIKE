@@ -75,6 +75,7 @@ describe('AppShell menu', () => {
   it('uses semantic controls and explains every difficulty with length and recommended WPM', () => {
     const { root } = setup();
 
+    expect(root.textContent).toContain('ENDLESS SURVIVAL');
     expect(root.querySelector('fieldset')).not.toBeNull();
     expect(root.querySelectorAll('input[type="radio"][name="difficulty"]')).toHaveLength(3);
     expect(root.querySelectorAll('input[type="checkbox"]')).toHaveLength(2);
@@ -177,6 +178,72 @@ describe('AppShell game screens', () => {
     expect(hud.textContent).toContain('3');
     expect(root.querySelector<HTMLProgressElement>('progress')?.value).toBe(65);
     expect(root.textContent).toContain('65%');
+  });
+
+  it('shows the snapshot-owned time to the next level and the max-level state', () => {
+    const { root, shell } = setup();
+
+    shell.render(resultSnapshot({
+      phase: 'playing',
+      activeMs: 44_000,
+      level: 1,
+      nextLevelRemainingMs: 1_000,
+    }));
+    expect(root.querySelector('[data-hud="next-level"]')?.textContent).toBe('00:01');
+
+    shell.render(resultSnapshot({
+      phase: 'playing',
+      activeMs: 540_000,
+      level: 12,
+      nextLevelRemainingMs: null,
+    }));
+    expect(root.querySelector('[data-hud="next-level"]')?.textContent).toBe('MAX LEVEL');
+  });
+
+  it('rounds the next-level countdown up so positive time never reads zero', () => {
+    const { root, shell } = setup();
+
+    shell.render(resultSnapshot({ phase: 'playing', nextLevelRemainingMs: 1 }));
+
+    expect(root.querySelector('[data-hud="next-level"]')?.textContent).toBe('00:01');
+  });
+
+  it('announces a broken combo only while snapshot feedback is active', () => {
+    const { root, shell } = setup();
+    const feedback = root.querySelector<HTMLElement>('[data-hud="combo-feedback"]');
+
+    shell.render(resultSnapshot({ phase: 'playing', combo: 0, comboBrokenRemainingMs: 180 }));
+    expect(feedback?.textContent).toBe('COMBO BROKEN');
+    expect(feedback?.hidden).toBe(false);
+    expect(feedback?.getAttribute('aria-live')).toBe('polite');
+
+    shell.render(resultSnapshot({ phase: 'playing', comboBrokenRemainingMs: 0 }));
+    expect(feedback?.hidden).toBe(true);
+  });
+
+  it.each([
+    ['repair', 'REPAIR // +20 SHIELD'],
+    ['pulse', 'PULSE // CLEAR 4'],
+    ['freeze', 'FREEZE // HALF SPEED'],
+  ] as const)('shows non-interactive %s help only while the snapshot hint is active', (kind, copy) => {
+    const { root, shell } = setup();
+
+    shell.render(resultSnapshot({
+      phase: 'playing',
+      specialHint: kind,
+      specialHintRemainingMs: 1_600,
+    }));
+    const hint = root.querySelector<HTMLElement>('[data-special-hint]');
+    expect(hint?.textContent).toContain(copy);
+    expect(hint?.hidden).toBe(false);
+    expect(hint?.tabIndex).toBe(-1);
+
+    shell.render(resultSnapshot({
+      phase: 'playing',
+      specialHint: kind,
+      specialHintRemainingMs: 0,
+    }));
+    expect(hint?.hidden).toBe(true);
   });
 
   it('synchronizes the shield progress value and accessibility value on every render', () => {
@@ -296,6 +363,20 @@ describe('AppShell game screens', () => {
     expect(results.textContent).toContain('5');
     expect(results.textContent).toContain('Level 4');
     expect(results.textContent).toContain('2,000');
+    expect(results.textContent).toContain('Typing errors');
+    expect(results.textContent).toContain('Breaches');
+    expect(results.textContent).not.toContain('Misses');
+    expect(root.querySelector('[data-result="errors"]')?.textContent).toBe('10');
+    expect(root.querySelector('[data-result="breaches"]')?.textContent).toBe('5');
+    expect(root.querySelector('[data-result="level"]')?.closest('div')?.classList).toContain('results-grid-wide');
+
+    const metrics = [...root.querySelectorAll<HTMLElement>('.results-grid > div')];
+    expect(metrics).toHaveLength(8);
+    for (const metric of metrics) {
+      expect(metric.children).toHaveLength(2);
+      expect(metric.querySelector('dt')?.textContent?.trim()).not.toBe('');
+      expect(metric.querySelector('dd')?.textContent?.trim()).not.toBe('');
+    }
   });
 
   it('displays zero accuracy and WPM when no input was recorded', () => {
@@ -376,5 +457,12 @@ describe('short-height layout', () => {
     expect(wideRules).toMatch(/\.hud\s*{[^}]*position:\s*fixed;[^}]*left:\s*16px;/s);
     expect(narrowRules).toMatch(/\.hud\s*{[^}]*position:\s*static;[^}]*width:\s*100%;/s);
     expect(styles).toContain('aspect-ratio: 480 / 800');
+  });
+
+  it('keeps special help non-interactive and spans the final result metric across the grid', () => {
+    const styles = readFileSync(resolve(process.cwd(), 'src/styles.css'), 'utf8');
+
+    expect(styles).toMatch(/\.special-hint\s*{[^}]*pointer-events:\s*none;/s);
+    expect(styles).toMatch(/\.results-grid-wide\s*{[^}]*grid-column:\s*1\s*\/\s*-1;/s);
   });
 });

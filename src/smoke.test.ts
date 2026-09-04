@@ -73,7 +73,7 @@ const createHarness = ({ beginCombat = true }: { beginCombat?: boolean } = {}) =
     resumeFromGesture: vi.fn(),
     resetPresentation: vi.fn(),
   };
-  const shell = { update: vi.fn() };
+  const shell = { consume: vi.fn(), update: vi.fn() };
   const parts = { model, renderer, audio, shell } satisfies RuntimeParts;
   const runtime = createKeystrikeRuntime(parts, frames.environment);
   return { frames, model, renderer, audio, shell, runtime, consumedByRenderer, consumedByAudio };
@@ -127,8 +127,8 @@ describe('fixed-step browser runtime', () => {
     expect(drainEvents).toHaveBeenCalledTimes(6);
   });
 
-  it('drains each update once and gives renderer and audio the same frozen event list', () => {
-    const { frames, model, renderer, audio, consumedByRenderer, consumedByAudio } = createHarness();
+  it('drains each update once and gives every presentation consumer the same frozen event list', () => {
+    const { frames, model, renderer, audio, shell, consumedByRenderer, consumedByAudio } = createHarness();
     model.injectTarget({
       id: 90,
       word: 'p',
@@ -144,10 +144,15 @@ describe('fixed-step browser runtime', () => {
 
     expect(renderer.consume).toHaveBeenCalledOnce();
     expect(audio.consume).toHaveBeenCalledOnce();
+    expect(shell.consume).toHaveBeenCalledOnce();
+    expect(shell.consume).toHaveBeenCalledWith(consumedByRenderer[0]);
     expect(consumedByRenderer[0]).toBe(consumedByAudio[0]);
+    expect(shell.consume.mock.calls[0]?.[0]).toBe(consumedByRenderer[0]);
     expect(Object.isFrozen(consumedByRenderer[0])).toBe(true);
+    expect(Object.isFrozen(shell.consume.mock.calls[0]?.[0])).toBe(true);
     expect(Object.isFrozen(consumedByRenderer[0]?.at(-1))).toBe(true);
     expect(consumedByRenderer[0]?.map(({ type }) => type)).toEqual(['shot', 'destroyed']);
+    expect(shell.consume.mock.calls[0]?.[0]).toHaveLength(2);
     expect(model.drainEvents()).toEqual([]);
   });
 

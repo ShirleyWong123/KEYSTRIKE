@@ -1,8 +1,14 @@
 import type { AudioEngine } from '../audio/audio-engine';
 import { accuracy, wpm } from '../game/metrics';
 import type { GameModel } from '../game/game-model';
-import type { Difficulty, GamePhase, GameSettings, GameSnapshot } from '../game/types';
+import type { Difficulty, GameEvent, GamePhase, GameSettings, GameSnapshot } from '../game/types';
 import { StorageAdapter } from './storage';
+
+const SPECIAL_HINT_COPY = {
+  repair: 'REPAIR // +20 SHIELD',
+  pulse: 'PULSE // CLEAR 4',
+  freeze: 'FREEZE // HALF SPEED',
+} as const;
 
 const DIFFICULTIES = [
   { value: 'easy', label: 'Cadet', length: '3–5 letters', wpm: '20–35 WPM' },
@@ -39,6 +45,15 @@ const formatDuration = (activeMs: number): string => {
   const seconds = Math.floor((safeMs % 60_000) / 1_000);
   const tenths = Math.floor((safeMs % 1_000) / 100);
   return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}.${tenths}`;
+};
+
+const formatNextLevel = (remainingMs: number | null): string => {
+  if (remainingMs === null) return 'MAX LEVEL';
+  const safeMs = Number.isFinite(remainingMs) && remainingMs > 0 ? remainingMs : 0;
+  const totalSeconds = Math.ceil(safeMs / 1_000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
 };
 
 const defaultStorage = (): StorageAdapter =>
@@ -94,6 +109,9 @@ export class AppShell {
     this.render(snapshot);
   }
 
+  /** UI event fan-out boundary; snapshot fields remain authoritative for timed DOM feedback. */
+  consume(_: readonly GameEvent[]): void {}
+
   render(snapshot: GameSnapshot = this.model.snapshot()): void {
     this.updateHud(snapshot);
     const inMenu = snapshot.phase === 'menu';
@@ -127,6 +145,7 @@ export class AppShell {
       <section class="menu-screen" data-screen="menu" aria-labelledby="mission-title">
         <p class="eyebrow">ORBITAL DEFENSE COMMAND // KS-01</p>
         <h1 id="mission-title"><span>KEY</span>STRIKE</h1>
+        <p class="mission-mode">ENDLESS SURVIVAL</p>
         <p class="mission-copy">Lock a beacon with its first letter. Keep typing to fire and defend the orbital line.</p>
         <fieldset class="difficulty-picker">
           <legend>Select mission clearance</legend>
@@ -152,8 +171,14 @@ export class AppShell {
         <div class="game-frame">
           <header class="hud" aria-label="Mission status">
             <div class="hud-metric"><span>Score</span><strong data-hud="score">0</strong></div>
-            <div class="hud-metric"><span>Combo</span><strong data-hud="combo">0</strong></div>
+            <div class="hud-metric">
+              <span>Combo</span><strong data-hud="combo">0</strong>
+              <small class="combo-feedback" data-hud="combo-feedback" aria-live="polite" hidden>COMBO BROKEN</small>
+            </div>
             <div class="hud-metric"><span>Level</span><strong data-hud="level">1</strong></div>
+            <div class="hud-metric next-level-status">
+              <span>Next level</span><strong data-hud="next-level">00:45</strong>
+            </div>
             <div class="shield-status">
               <span>Shield <strong data-hud="shield-text">100%</strong></span>
               <progress data-hud="shield" max="100" value="100" aria-label="Shield integrity">100%</progress>
@@ -165,6 +190,7 @@ export class AppShell {
             <div class="countdown" data-countdown role="status" aria-live="polite" hidden>
               <span>Systems synchronized</span><strong>Mission starting</strong>
             </div>
+            <p class="special-hint" data-special-hint aria-live="polite" hidden></p>
             <p class="tutorial-hint" data-tutorial-hint hidden>
               Type the first letter to lock. Keep typing to fire.
             </p>
@@ -199,8 +225,9 @@ export class AppShell {
             <div><dt>Accuracy</dt><dd data-result="accuracy">0%</dd></div>
             <div><dt>Average speed</dt><dd data-result="wpm">0 WPM</dd></div>
             <div><dt>Max combo</dt><dd data-result="combo">0</dd></div>
-            <div><dt>Misses</dt><dd data-result="misses">0</dd></div>
-            <div><dt>Reached</dt><dd data-result="level">Level 1</dd></div>
+            <div><dt>Typing errors</dt><dd data-result="errors">0</dd></div>
+            <div><dt>Breaches</dt><dd data-result="breaches">0</dd></div>
+            <div class="results-grid-wide"><dt>Reached level</dt><dd data-result="level">Level 1</dd></div>
           </dl>
           <div class="dialog-actions horizontal">
             <button class="primary-action" type="button" data-action="restart">Restart mission</button>
@@ -337,6 +364,14 @@ export class AppShell {
     this.setText('[data-hud="score"]', snapshot.score.toLocaleString('en-US'));
     this.setText('[data-hud="combo"]', String(snapshot.combo));
     this.setText('[data-hud="level"]', String(snapshot.level));
+    this.setText('[data-hud="next-level"]', formatNextLevel(snapshot.nextLevelRemainingMs));
+    this.required('[data-hud="combo-feedback"]').hidden = snapshot.comboBrokenRemainingMs <= 0;
+    const specialHint = this.required('[data-special-hint]');
+    const showSpecialHint = snapshot.specialHint !== null && snapshot.specialHintRemainingMs > 0;
+    specialHint.hidden = !showSpecialHint;
+    specialHint.textContent = showSpecialHint && snapshot.specialHint
+      ? SPECIAL_HINT_COPY[snapshot.specialHint]
+      : '';
     this.setText('[data-hud="shield-text"]', `${snapshot.shield}%`);
     const shield = this.required<HTMLProgressElement>('[data-hud="shield"]');
     shield.value = snapshot.shield;
@@ -355,7 +390,8 @@ export class AppShell {
     this.setText('[data-result="accuracy"]', `${formatMetric(runAccuracy)}%`);
     this.setText('[data-result="wpm"]', `${formatMetric(runWpm)} WPM`);
     this.setText('[data-result="combo"]', String(snapshot.maxCombo));
-    this.setText('[data-result="misses"]', String(snapshot.missedWords));
+    this.setText('[data-result="errors"]', String(snapshot.wrongKeys));
+    this.setText('[data-result="breaches"]', String(snapshot.missedWords));
     this.setText('[data-result="level"]', `Level ${snapshot.level}`);
   }
 
