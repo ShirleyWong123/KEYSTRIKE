@@ -1,9 +1,9 @@
+audit/
 .worktrees/
 .superpowers/
 node_modules/
 dist/
-.DS_Store
 coverage/
 *.log
 *.tsbuildinfo
-.vercel
+.DS_Store
