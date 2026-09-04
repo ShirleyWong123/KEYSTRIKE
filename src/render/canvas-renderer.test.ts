@@ -154,6 +154,36 @@ describe('CanvasRenderer', () => {
     Object.defineProperty(window, 'devicePixelRatio', { configurable: true, value: originalDpr });
   });
 
+  it('sizes the backing store from CSS bounds while retaining logical coordinates', () => {
+    const originalDpr = window.devicePixelRatio;
+    Object.defineProperty(window, 'devicePixelRatio', { configurable: true, value: 3 });
+    const context = new RecordingContext();
+    const canvas = document.createElement('canvas');
+    vi.spyOn(canvas, 'getContext').mockReturnValue(context as unknown as CanvasRenderingContext2D);
+    vi.spyOn(canvas, 'getBoundingClientRect').mockReturnValue({
+      x: 0,
+      y: 0,
+      top: 0,
+      right: 300,
+      bottom: 500,
+      left: 0,
+      width: 300,
+      height: 500,
+      toJSON: () => ({}),
+    });
+
+    const renderer = new CanvasRenderer(canvas, settings());
+
+    expect(canvas.width).toBe(600);
+    expect(canvas.height).toBe(1000);
+    expect(context.calls.filter(({ op }) => op === 'setTransform').at(-1)?.args)
+      .toEqual([1.25, 0, 0, 1.25, 0, 0]);
+    renderer.resize();
+    expect(canvas.width).toBe(600);
+    expect(canvas.height).toBe(1000);
+    Object.defineProperty(window, 'devicePixelRatio', { configurable: true, value: originalDpr });
+  });
+
   it('draws typed text separately in orange with an underline before the light untyped text', () => {
     const { context, renderer } = harness();
 

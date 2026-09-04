@@ -110,10 +110,20 @@ export class CanvasRenderer {
   resize(): void {
     const rawDpr = typeof window === 'undefined' ? 1 : window.devicePixelRatio;
     const dpr = clamp(rawDpr, 1, MAX_DPR);
-    this.canvas.width = Math.round(CANVAS_WIDTH * dpr);
-    this.canvas.height = Math.round(CANVAS_HEIGHT * dpr);
+    const bounds = this.canvas.getBoundingClientRect();
+    const cssWidth = bounds.width > 0 ? bounds.width : CANVAS_WIDTH;
+    const cssHeight = bounds.height > 0 ? bounds.height : CANVAS_HEIGHT;
+    this.canvas.width = Math.round(cssWidth * dpr);
+    this.canvas.height = Math.round(cssHeight * dpr);
     this.canvas.style.aspectRatio = `${CANVAS_WIDTH} / ${CANVAS_HEIGHT}`;
-    this.context.setTransform(dpr, 0, 0, dpr, 0, 0);
+    this.context.setTransform(
+      this.canvas.width / CANVAS_WIDTH,
+      0,
+      0,
+      this.canvas.height / CANVAS_HEIGHT,
+      0,
+      0,
+    );
   }
 
   readonly measureWord = (word: string): WordMeasure => {

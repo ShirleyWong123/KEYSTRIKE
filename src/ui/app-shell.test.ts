@@ -126,6 +126,32 @@ describe('AppShell menu', () => {
 });
 
 describe('AppShell game screens', () => {
+  it('shows the in-field typing hint only while the tutorial target remains active', () => {
+    const { root, shell } = setup();
+    const tutorial = {
+      id: 1,
+      word: 'NOVA',
+      typed: 0,
+      x: 190,
+      y: 100,
+      width: 100,
+      height: 42,
+      speed: 19.6,
+      kind: 'normal' as const,
+      tutorial: true,
+    };
+
+    shell.render(resultSnapshot({ phase: 'playing', shield: 100, targets: [tutorial] }));
+    const hint = root.querySelector<HTMLElement>('[data-tutorial-hint]');
+    expect(hint).not.toBeNull();
+    expect(hint?.hidden).toBe(false);
+    expect(hint?.textContent).toContain('first letter');
+    expect(hint?.textContent).toContain('Keep typing');
+
+    shell.render(resultSnapshot({ phase: 'playing', shield: 100, targets: [] }));
+    expect(hint?.hidden).toBe(true);
+  });
+
   it('keeps crisp HUD text outside the canvas and includes a labelled shield bar', () => {
     const { root, shell } = setup();
     shell.render(resultSnapshot({ phase: 'playing', shield: 65, score: 890, combo: 7, level: 3 }));

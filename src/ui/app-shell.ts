@@ -100,6 +100,8 @@ export class AppShell {
     this.pauseDialog.hidden = snapshot.phase !== 'paused';
     this.resultsDialog.hidden = snapshot.phase !== 'gameover';
     this.required('[data-countdown]').hidden = snapshot.phase !== 'countdown';
+    this.required('[data-tutorial-hint]').hidden = snapshot.phase !== 'playing'
+      || !snapshot.targets.some(({ tutorial }) => tutorial === true);
 
     if (snapshot.phase === 'gameover' && this.lastPhase !== 'gameover') this.updateResults(snapshot);
     if (snapshot.phase !== this.lastPhase) this.moveFocus(snapshot.phase);
@@ -161,6 +163,9 @@ export class AppShell {
             <div class="countdown" data-countdown role="status" aria-live="polite" hidden>
               <span>Systems synchronized</span><strong>Mission starting</strong>
             </div>
+            <p class="tutorial-hint" data-tutorial-hint hidden>
+              Type the first letter to lock. Keep typing to fire.
+            </p>
           </div>
         </div>
       </section>

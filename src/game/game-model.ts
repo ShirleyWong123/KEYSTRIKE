@@ -44,6 +44,7 @@ export interface GameModelTestApi {
   injectTarget(target: Target): void;
   advanceCountdown(deltaMs: number): void;
   attemptSpawn(): void;
+  forceLevelForDebug(level: number): void;
 }
 
 export interface GameModelOptions {
@@ -206,6 +207,19 @@ export class GameModel implements GameModelTestApi {
     if (!spawned) return;
     this.targets.push(cloneTarget(spawned));
     if (kind !== 'normal') this.lastSpecialSpawnActiveMs = this.activeMs;
+  }
+
+  /** Test/debug-only: advances progression without simulating movement or spawn opportunities. */
+  forceLevelForDebug(requestedLevel: number): void {
+    if (this.phase !== 'playing' || !Number.isFinite(requestedLevel)) return;
+    const targetLevel = Math.min(LEVELS.length, Math.max(this.level, Math.floor(requestedLevel)));
+    if (targetLevel === this.level) return;
+    for (let crossedLevel = this.level + 1; crossedLevel <= targetLevel; crossedLevel += 1) {
+      this.events.push({ type: 'level-up', level: crossedLevel });
+    }
+    this.level = targetLevel;
+    this.activeMs = Math.max(this.activeMs, (targetLevel - 1) * 45_000);
+    this.freezeRemainingMs = Math.max(0, this.freezeExpiresAtActiveMs - this.activeMs);
   }
 
   private resetRun(phase: GamePhase): void {
