@@ -319,7 +319,53 @@ describe('CanvasRenderer', () => {
     expect(flashes[0]?.globalAlpha).toBeLessThanOrEqual(0.18);
   });
 
-  it('draws a red battlefield-edge pulse for the nearest eligible normal threat', () => {
+  it('does not refresh an active ambient flash when another destruction retains its local explosion', () => {
+    const { context, renderer, setNow } = harness();
+    renderer.render(snapshot(), 0);
+    renderer.consume([{ type: 'destroyed', target: target({ id: 1 }) }]);
+    renderer.render(snapshot(), 0);
+    context.calls.length = 0;
+
+    setNow(1_050);
+    renderer.consume([{ type: 'destroyed', target: target({ id: 2, x: 260 }) }]);
+    renderer.render(snapshot(), 0);
+
+    const flashes = context.calls.filter(({ op, fillStyle }) => op === 'fillRect' && fillStyle === '#ffffff');
+    expect(flashes).toHaveLength(1);
+    expect(flashes[0]?.globalAlpha).toBeCloseTo(0.18 * (1 - 50 / 120));
+    expect(context.calls.filter(({ op, strokeStyle }) => op === 'stroke' && strokeStyle === '#fff3d6')).toHaveLength(2);
+  });
+
+  it('draws threat feedback only for normal targets in the 180px band with stable ties and before labels', () => {
+    const { context, renderer } = harness();
+    const boundary = snapshot({ targets: [target({ id: 1, y: 504 })] });
+    renderer.render(boundary, 0);
+    expect(context.calls.some(({ op, strokeStyle }) => op === 'strokeRect' && strokeStyle === '#ff385c')).toBe(true);
+
+    context.calls.length = 0;
+    renderer.render(snapshot({ targets: [target({ id: 1, y: 503 })] }), 0);
+    expect(context.calls.some(({ op, strokeStyle }) => op === 'strokeRect' && strokeStyle === '#ff385c')).toBe(false);
+
+    context.calls.length = 0;
+    const state = snapshot({ targets: [
+      target({ id: 8, word: 'TALL', y: 600, height: 100 }),
+      target({ id: 99, word: 'heal', kind: 'repair', y: 683 }),
+      target({ id: 7, word: 'TIE', y: 600 }),
+      target({ id: 6, word: 'OUT', y: 503 }),
+    ] });
+    const before = structuredClone(state);
+
+    renderer.render(state, 0);
+
+    const warning = context.calls.find(({ op, strokeStyle }) => op === 'strokeRect' && strokeStyle === '#ff385c');
+    expect(warning?.globalAlpha).toBeCloseTo(0.08 + ((636 - (720 - 180)) / 180) * (0.07 + 0.5 * 0.09));
+    expect(state.targets.map(({ id }) => id)).toEqual(before.targets.map(({ id }) => id));
+    const warningIndex = context.calls.findIndex(({ op, strokeStyle }) => op === 'strokeRect' && strokeStyle === '#ff385c');
+    const firstLabelIndex = context.calls.findIndex(({ op }) => op === 'fillText');
+    expect(warningIndex).toBeLessThan(firstLabelIndex);
+  });
+
+  it('does not mutate threat state while drawing a locked target', () => {
     const { context, renderer } = harness();
     const state = snapshot({
       lockedTargetId: 2,

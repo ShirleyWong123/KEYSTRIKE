@@ -547,8 +547,8 @@ describe('GameModel freeze specials', () => {
 });
 
 describe('GameModel special spawning', () => {
-  it('shows each special hint once per run and expires it only during active gameplay', () => {
-    const model = specialSpawnModel([0.079, 0.67, 0.079, 0.67], false, 'hard');
+  it('shows a special-kind hint once per run, including after expiry and cooldown, then resets it on restart', () => {
+    const model = specialSpawnModel([0.079, 0.67, 0.079, 0.67, 0.079, 0.67], false, 'hard');
     model.forceLevelForDebug(2);
     model.injectTarget(target({ id: 63, word: 'a', speed: 0 }));
     model.injectTarget(target({ id: 64, word: 'b', speed: 0 }));
@@ -561,14 +561,19 @@ describe('GameModel special spawning', () => {
     model.resume();
     model.update(1_600);
     expect(model.snapshot()).toMatchObject({ specialHint: null, specialHintRemainingMs: 0 });
+    for (const letter of 'freeze') model.handleKey(letter);
+    model.update(10_400);
+    model.attemptSpawn();
+    expect(model.snapshot().targets.filter(({ kind }) => kind === 'freeze')).toHaveLength(1);
+    expect(model.snapshot()).toMatchObject({ specialHint: null, specialHintRemainingMs: 0 });
 
     model.restart();
     model.beginCombat();
     for (const letter of model.snapshot().targets[0]!.word) model.handleKey(letter);
     model.drainEvents();
     model.forceLevelForDebug(2);
-    model.injectTarget(target({ id: 65, word: 'a', speed: 0 }));
-    model.injectTarget(target({ id: 66, word: 'b', speed: 0 }));
+    model.injectTarget(target({ id: 67, word: 'a', speed: 0 }));
+    model.injectTarget(target({ id: 68, word: 'b', speed: 0 }));
     model.attemptSpawn();
     expect(model.snapshot()).toMatchObject({ specialHint: 'freeze', specialHintRemainingMs: 1_600 });
   });

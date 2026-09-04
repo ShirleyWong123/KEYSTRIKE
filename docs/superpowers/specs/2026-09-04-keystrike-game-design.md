@@ -299,7 +299,7 @@ KEYSTRIKE 是一款面向桌面浏览器的原创竖屏科幻打字射击游戏�
 
 #### 实施自动化验证记录（2026-09-04）
 
-- `npm test` — PASS（10 个测试文件，195 个测试）。
+- `npm test` — PASS（10 个测试文件，196 个测试）。
 - `npm run typecheck` — PASS（`tsc -b --pretty false` 退出码 0）。
 - `npm run build` — PASS（`tsc -b && vite build` 成功生成 `dist/`）。
 - 本记录仅覆盖自动化验证；上述浏览器试玩验收尚未由这些结果确认。
@@ -309,7 +309,7 @@ KEYSTRIKE 是一款面向桌面浏览器的原创竖屏科幻打字射击游戏�
 - 环境：Codex In-app Browser（Chromium 内核，精确版本未暴露），`http://127.0.0.1:5177/?debug=1`；服务进程工作目录已核对为隔离工作树 `.worktrees/keystrike-playtest-improvements`。本次未将 5175 上可能存在的旧服务作为证据。
 - Cadet — **PASS**：倒计时后仅显示位于顶部可读区域的 `NOVA` 教学词；观察到首字母锁定、橙色逐字状态与弹道、教学完成后才出现普通目标、错误红边和 `COMBO BROKEN`，HUD 显示下一级倒计时。证据：`21-task5-cadet-lock.png`、`22-task5-cadet-post-tutorial.png`、`23-task5-cadet-error.png`。
 - Pilot — **PASS**：倒计时后仅显示位于顶部可读区域的 `ORBIT` 教学词；观察到首字母锁定、橙色逐字状态与弹道、教学完成后才出现普通目标、错误红边和 `COMBO BROKEN`，HUD 显示下一级倒计时。证据：`24-task5-pilot-tutorial.png`、`25-task5-pilot-lock.png`、`26-task5-pilot-post-tutorial.png`、`27-task5-pilot-error.png`。
-- Ace — **PASS（已观察范围）**：完成 `VECTOR` 后 HUD 得分为 266，符合逐字分与完成分的 1.25 倍计分；连续完成达到 Combo 5，并在护盾 100%、无越线的受控真人输入序列中自然到达 Level 2。证据：`28-task5-ace-tutorial.png`、`30-task5-ace-combo5.png`、`33-task5-ace-level2-no-breach.png`。
+- Ace — **PASS（已观察范围）**：浏览器操作观察记录直接确认：完成 `VECTOR` 后 HUD 得分为 266，且该值符合逐字分与完成分的 1.25 倍计分；连续完成达到 Combo 5，并在护盾 100%、无越线的受控真人输入序列中自然到达 Level 2。`28-task5-ace-tutorial.png` 仅可见 Ace 教学词；`30-task5-ace-combo5.png` 可见 Combo 5；`33-task5-ace-level2-no-breach.png` 可见 Level 2、护盾 100% 与 Combo 13，三张截图均不单独作为 266 分的证据。
 - 普通动态效果 — **PASS**：连续销毁期间仍可读取剩余 `discover` 标签，未观察到全屏闪光洗白文字。证据：`32-task5-normal-motion-flash.png`。
 - 减弱动态效果 — **PASS**：连续销毁期间剩余 `time` 标签可读，闪光和碎片观感明显较普通模式克制；近防线红色边缘提示未遮挡 `time`，已输入首字母与锁定框仍保留。证据：`34-task5-reduced-motion-flash.png`、`35-task5-danger-lock.png`。
 - 结算语义 — **PASS（修复后复验）**：在连接的 Chrome 中自然累计 5 次 Breaches 后，结算页正确显示 `Accuracy`、`Typing errors`、`Breaches` 和 `Reached level`；`Breaches` 与 `Reached level` 各自跨满整行，未再观察到右侧空白网格单元。证据：`37-task5-results-fixed.png`。
