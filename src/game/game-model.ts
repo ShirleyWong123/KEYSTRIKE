@@ -1,5 +1,5 @@
 import { LEVELS, levelForActiveMs, scoreForCompletion } from './config';
-import { findLockCandidate, TargetManager } from './target-manager';
+import { DEFENSE_LINE, findLockCandidate, TargetManager } from './target-manager';
 import type { SpawnRequest } from './target-manager';
 import type { Difficulty, GameEvent, GamePhase, GameSettings, GameSnapshot, Target, TargetKind } from './types';
 
@@ -267,13 +267,19 @@ export class GameModel implements GameModelTestApi {
     let remainingMs = deltaMs;
     while (remainingMs > 0 && this.phase === 'playing') {
       this.processProgressionBoundaries();
+      const freezeFactor = this.freezeExpiresAtActiveMs > this.activeMs ? 0.5 : 1;
       const segmentMs = Math.min(
         remainingMs,
         this.msUntilNextLevelBoundary(),
         this.msUntilNextSpawnOpportunity(),
         this.msUntilFreezeExpiry(),
+        this.msUntilNextBreach(freezeFactor),
       );
-      this.moveTargets(segmentMs, this.freezeExpiresAtActiveMs > this.activeMs ? 0.5 : 1);
+      if (segmentMs === 0) {
+        this.moveTargets(0, freezeFactor);
+        continue;
+      }
+      this.moveTargets(segmentMs, freezeFactor);
       this.activeMs += segmentMs;
       this.spawnElapsedMs += segmentMs;
       this.freezeRemainingMs = Math.max(0, this.freezeExpiresAtActiveMs - this.activeMs);
@@ -304,6 +310,19 @@ export class GameModel implements GameModelTestApi {
   private msUntilFreezeExpiry(): number {
     const remainingMs = this.freezeExpiresAtActiveMs - this.activeMs;
     return remainingMs > 0 ? remainingMs : Number.POSITIVE_INFINITY;
+  }
+
+  private msUntilNextBreach(freezeFactor: number): number {
+    let shortestMs = Number.POSITIVE_INFINITY;
+    for (const target of this.targets) {
+      const distance = DEFENSE_LINE - (target.y + target.height);
+      if (!Number.isFinite(distance)) continue;
+      if (distance <= 0) return 0;
+      const effectiveSpeed = target.speed * freezeFactor;
+      if (!Number.isFinite(effectiveSpeed) || effectiveSpeed <= 0) continue;
+      shortestMs = Math.min(shortestMs, (distance / effectiveSpeed) * 1_000);
+    }
+    return shortestMs;
   }
 
   private moveTargets(deltaMs: number, freezeFactor: number): void {

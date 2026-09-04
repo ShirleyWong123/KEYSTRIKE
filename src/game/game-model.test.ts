@@ -589,6 +589,74 @@ describe('GameModel chronological progression', () => {
   });
 });
 
+describe('GameModel chronological breaches', () => {
+  it('stops a large frozen update at simultaneous fatal breaches just like smaller slices', () => {
+    const run = (chunks: readonly number[]) => {
+      const model = new GameModel(new TargetManager(() => 0), { autoSpawn: false });
+      model.start(settings());
+      model.beginCombat();
+      model.injectTarget(target({ id: 2_100, word: 'f', kind: 'freeze', speed: 0 }));
+      model.handleKey('f');
+      model.drainEvents();
+      for (let id = 2_101; id < 2_106; id += 1) {
+        model.injectTarget(target({ id, word: 'a', y: 680, height: 20, speed: 40 }));
+      }
+      for (const chunk of chunks) model.update(chunk);
+      return { snapshot: model.snapshot(), events: model.drainEvents() };
+    };
+
+    const large = run([1_500]);
+    const sliced = run(Array.from({ length: 15 }, () => 100));
+
+    expect(large.snapshot).toMatchObject({
+      activeMs: 1_000,
+      phase: 'gameover',
+      shield: 0,
+      missedWords: 5,
+      freezeRemainingMs: 4_000,
+    });
+    expect({
+      activeMs: large.snapshot.activeMs,
+      phase: large.snapshot.phase,
+      shield: large.snapshot.shield,
+      missedWords: large.snapshot.missedWords,
+      freezeRemainingMs: large.snapshot.freezeRemainingMs,
+    }).toEqual({
+      activeMs: sliced.snapshot.activeMs,
+      phase: sliced.snapshot.phase,
+      shield: sliced.snapshot.shield,
+      missedWords: sliced.snapshot.missedWords,
+      freezeRemainingMs: sliced.snapshot.freezeRemainingMs,
+    });
+    expect(large.snapshot.targets[0]?.y).toBeCloseTo(sliced.snapshot.targets[0]?.y ?? Number.NaN, 10);
+    expect(large.events).toEqual(sliced.events);
+  });
+
+  it('moves survivors through the remainder after a nonfatal breach boundary', () => {
+    const run = (chunks: readonly number[]) => {
+      const model = new GameModel(new TargetManager(() => 0), { autoSpawn: false });
+      model.start(settings());
+      model.beginCombat();
+      model.injectTarget(target({ id: 2_200, word: 'a', y: 680, height: 20, speed: 40 }));
+      model.injectTarget(target({ id: 2_201, word: 'b', y: 100, speed: 10 }));
+      model.drainEvents();
+      for (const chunk of chunks) model.update(chunk);
+      return { snapshot: model.snapshot(), events: model.drainEvents() };
+    };
+
+    const large = run([1_000]);
+    const sliced = run(Array.from({ length: 10 }, () => 100));
+
+    expect(large.snapshot).toMatchObject({ activeMs: 1_000, phase: 'playing', shield: 80, missedWords: 1 });
+    expect(large.snapshot.targets.find(({ id }) => id === 2_201)?.y).toBeCloseTo(110, 10);
+    expect(large.events).toEqual(sliced.events);
+    expect(large.events).toContainEqual(expect.objectContaining({
+      type: 'breach',
+      target: expect.objectContaining({ id: 2_200, y: 700 }),
+    }));
+  });
+});
+
 describe('GameModel spawn state boundaries', () => {
   it('does not attempt a spawn outside the playing phase', () => {
     let spawnCalls = 0;
