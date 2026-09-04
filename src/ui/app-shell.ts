@@ -226,7 +226,7 @@ export class AppShell {
             <div><dt>Average speed</dt><dd data-result="wpm">0 WPM</dd></div>
             <div><dt>Max combo</dt><dd data-result="combo">0</dd></div>
             <div><dt>Typing errors</dt><dd data-result="errors">0</dd></div>
-            <div><dt>Breaches</dt><dd data-result="breaches">0</dd></div>
+            <div class="results-grid-wide"><dt>Breaches</dt><dd data-result="breaches">0</dd></div>
             <div class="results-grid-wide"><dt>Reached level</dt><dd data-result="level">Level 1</dd></div>
           </dl>
           <div class="dialog-actions horizontal">

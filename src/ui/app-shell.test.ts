@@ -369,6 +369,7 @@ describe('AppShell game screens', () => {
     expect(results.textContent).not.toContain('Misses');
     expect(root.querySelector('[data-result="errors"]')?.textContent).toBe('10');
     expect(root.querySelector('[data-result="breaches"]')?.textContent).toBe('5');
+    expect(root.querySelector('[data-result="breaches"]')?.closest('div')?.classList).toContain('results-grid-wide');
     expect(root.querySelector('[data-result="level"]')?.closest('div')?.classList).toContain('results-grid-wide');
 
     const metrics = [...root.querySelectorAll<HTMLElement>('.results-grid > div')];
@@ -464,6 +465,6 @@ describe('short-height layout', () => {
     const styles = readFileSync(resolve(process.cwd(), 'src/styles.css'), 'utf8');
 
     expect(styles).toMatch(/\.special-hint\s*{[^}]*pointer-events:\s*none;/s);
-    expect(styles).toMatch(/\.results-grid-wide\s*{[^}]*grid-column:\s*1\s*\/\s*-1;/s);
+    expect(styles).toMatch(/\.results-grid\s*>\s*\.results-grid-wide\s*{[^}]*grid-column:\s*1\s*\/\s*-1;/s);
   });
 });

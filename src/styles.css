@@ -526,7 +526,7 @@ canvas {
   background: #061422;
 }
 
-.results-grid-wide {
+.results-grid > .results-grid-wide {
   grid-column: 1 / -1;
 }
 
