@@ -60,8 +60,9 @@ export class TargetManager {
     if (!word) return null;
     const size = this.measureWord(word);
     const positions = this.candidatePositions(size.width, size.height);
+    const startIndex = Math.floor(this.random() * positions.length);
     for (let offset = 0; offset < positions.length; offset += 1) {
-      const position = positions[(Math.floor(this.random() * positions.length) + offset) % positions.length]!;
+      const position = positions[(startIndex + offset) % positions.length]!;
       if (!this.isLegalRect({ ...position, width: size.width, height: size.height }, request.targets)) continue;
       const id = request.id ?? this.allocateId(request.targets);
       this.nextId = Math.max(this.nextId, id + 1);
@@ -82,11 +83,12 @@ export class TargetManager {
   }
 
   update(targets: readonly Target[], deltaMs: number, freezeFactor: number): MovementResult {
-    const factor = Number.isFinite(freezeFactor) ? freezeFactor : 1;
+    const elapsed = Number.isFinite(deltaMs) && deltaMs >= 0 ? deltaMs : 0;
+    const factor = Number.isFinite(freezeFactor) ? Math.min(1, Math.max(0, freezeFactor)) : 1;
     const active: Target[] = [];
     const breached: Target[] = [];
     for (const target of targets) {
-      const moved = { ...target, y: target.y + target.speed * (deltaMs / 1000) * factor };
+      const moved = { ...target, y: target.y + target.speed * (elapsed / 1000) * factor };
       if (moved.y + moved.height >= DEFENSE_LINE) breached.push(moved);
       else active.push(moved);
     }
@@ -101,10 +103,9 @@ export class TargetManager {
 
   private candidatePositions(width: number, height: number): Array<{ x: number; y: number }> {
     const maxX = Math.max(HORIZONTAL_MARGIN, CANVAS_WIDTH - HORIZONTAL_MARGIN - width);
-    const maxY = Math.max(0, DEFENSE_LINE - height - LABEL_GAP);
     return Array.from({ length: 12 }, (_, index) => ({
       x: HORIZONTAL_MARGIN + ((maxX - HORIZONTAL_MARGIN) * index) / 11,
-      y: LABEL_GAP + ((maxY - LABEL_GAP) * ((index * 5) % 12)) / 11,
+      y: -height,
     }));
   }
 }

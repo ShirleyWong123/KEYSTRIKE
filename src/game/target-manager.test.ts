@@ -24,6 +24,35 @@ describe('target placement and movement', () => {
     expect(manager.isLegalRect({ x: spawned!.x + spawned!.width + 11, y: spawned!.y, width: 20, height: 36 }, [spawned!])).toBe(false);
   });
 
+  it('spawns labels above the visible field and varies horizontal placement', () => {
+    const manager = new TargetManager(() => 0, measure);
+    const first = manager.trySpawn({ difficulty: 'easy', level: 1, targets: [] });
+    const second = manager.trySpawn({ difficulty: 'easy', level: 1, targets: first ? [first] : [] });
+    expect(first).not.toBeNull();
+    expect(second).not.toBeNull();
+    expect(first!.y).toBe(-first!.height);
+    expect(second!.y).toBe(-second!.height);
+    expect(second!.x).not.toBe(first!.x);
+  });
+
+  it('allows exactly a 12px vertical gap and rejects an 11px gap', () => {
+    const manager = new TargetManager(() => 0.5, measure);
+    const existing = target({ x: 250, y: 100, width: 80, height: 36 });
+    expect(manager.isLegalRect({ x: 250, y: 147, width: 80, height: 36 }, [existing])).toBe(false);
+    expect(manager.isLegalRect({ x: 250, y: 148, width: 80, height: 36 }, [existing])).toBe(true);
+  });
+
+  it('returns null after exhausting all 12 placement attempts from one random start', () => {
+    let randomCalls = 0;
+    const manager = new TargetManager(() => {
+      randomCalls += 1;
+      return 0;
+    }, measure);
+    const blocker = target({ x: -100, y: -100, width: 700, height: 1000 });
+    expect(manager.trySpawn({ difficulty: 'easy', level: 1, targets: [blocker] })).toBeNull();
+    expect(randomCalls).toBe(2);
+  });
+
   it('respects the level active-target cap', () => {
     const manager = new TargetManager(() => 0.5, measure);
     const active = [target({ id: 1 }), target({ id: 2, x: 300 }), target({ id: 3, x: 200, y: 300 })];
@@ -40,6 +69,20 @@ describe('target placement and movement', () => {
     const result = manager.update([target({ speed: 40, y: 100 })], 1000, 0.5);
     expect(result.active[0]!.y).toBe(120);
     expect(result.breached).toEqual([]);
+  });
+
+  it.each([Number.NaN, Number.POSITIVE_INFINITY, -100])('normalizes invalid deltaMs (%s) to zero', (deltaMs) => {
+    const manager = new TargetManager(() => 0.5, measure);
+    const result = manager.update([target({ speed: 40, y: 100 })], deltaMs, 1);
+    expect(result.active[0]!.y).toBe(100);
+  });
+
+  it('defaults non-finite freeze factors to one and clamps finite values to [0, 1]', () => {
+    const manager = new TargetManager(() => 0.5, measure);
+    expect(manager.update([target({ speed: 40, y: 100 })], 1000, -1).active[0]!.y).toBe(100);
+    expect(manager.update([target({ speed: 40, y: 100 })], 1000, 2).active[0]!.y).toBe(140);
+    expect(manager.update([target({ speed: 40, y: 100 })], 1000, Number.NaN).active[0]!.y).toBe(140);
+    expect(manager.update([target({ speed: 40, y: 100 })], 1000, Number.POSITIVE_INFINITY).active[0]!.y).toBe(140);
   });
 
   it('reports targets that reach the defense line as breached', () => {
