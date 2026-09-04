@@ -21,6 +21,7 @@ export type GameEvent =
   | { type: 'destroyed'; target: Target }
   | { type: 'breach'; target: Target }
   | { type: 'level-up'; level: number }
+  | { type: 'sector-milestone'; level: 3 | 6 | 9 | 12 }
   | { type: 'special'; kind: Exclude<TargetKind, 'normal'>; affectedIds: number[] };
 
 export interface GameSettings {
@@ -43,5 +44,9 @@ export interface GameSnapshot {
   missedWords: number;
   lockedTargetId: number | null;
   freezeRemainingMs: number;
+  nextLevelRemainingMs: number | null;
+  comboBrokenRemainingMs: number;
+  specialHint: Exclude<TargetKind, 'normal'> | null;
+  specialHintRemainingMs: number;
   targets: readonly Target[];
 }
