@@ -6,11 +6,13 @@ const MAX_DPR = 2;
 const SHIP_X = CANVAS_WIDTH / 2;
 const SHIP_Y = 748;
 const ERROR_MS = 120;
+const IMPACT_MS = 120;
 const EXPLOSION_MS = 650;
 const BREACH_MS = 500;
 const LEVEL_UP_MS = 900;
 const SPECIAL_PULSE_MS = 420;
 const MAX_SHOTS = 64;
+const MAX_IMPACTS = 32;
 const MAX_EXPLOSIONS = 12;
 const MAX_BREACHES = 6;
 const MAX_SPECIAL_PULSES = 24;
@@ -23,6 +25,7 @@ const COLORS = {
   light: '#b9f8ff',
   orange: '#ff9d2e',
   projectile: '#ffbd66',
+  impact: '#ff9d2e',
   particle: '#78efff',
   red: '#ff385c',
   repair: '#53e39b',
@@ -86,6 +89,7 @@ const specialLabel = (kind: TargetKind): string | null => {
 export class CanvasRenderer {
   private readonly context: CanvasRenderingContext2D;
   private readonly shots: Shot[] = [];
+  private readonly impacts: TimedPoint[] = [];
   private readonly explosions: Explosion[] = [];
   private readonly breaches: TimedPoint[] = [];
   private readonly specialPulses: SpecialPulse[] = [];
@@ -133,6 +137,20 @@ export class CanvasRenderer {
     this.context.restore();
     return { width: Math.max(74, width), height: 42 };
   };
+
+  resetPresentation(): void {
+    this.shots.length = 0;
+    this.impacts.length = 0;
+    this.explosions.length = 0;
+    this.breaches.length = 0;
+    this.specialPulses.length = 0;
+    this.knownTargets.clear();
+    this.errorStartedAt = Number.NEGATIVE_INFINITY;
+    this.levelUp = null;
+    this.presentationTime = 0;
+    this.lastWallTime = null;
+    this.lastRenderedPhase = null;
+  }
 
   consume(events: readonly GameEvent[]): void {
     const currentTime = this.advancePresentationClock(this.lastRenderedPhase ?? 'playing');
@@ -211,6 +229,7 @@ export class CanvasRenderer {
     if (locked) this.drawTarget(locked, interpolation, frozen, true);
 
     this.drawProjectiles(currentTime);
+    this.drawImpacts(currentTime);
     this.drawExplosions(currentTime);
     this.drawSpecialPulses(currentTime);
     this.drawShip();
@@ -266,11 +285,28 @@ export class CanvasRenderer {
   }
 
   private prune(currentTime: number): void {
-    this.removeExpired(this.shots, (shot) => currentTime - shot.startedAt <= PROJECTILE_MS);
+    this.finishProjectiles(currentTime);
+    this.removeExpired(this.impacts, (impact) => currentTime - impact.startedAt <= IMPACT_MS);
     this.removeExpired(this.explosions, (effect) => currentTime - effect.startedAt <= EXPLOSION_MS);
     this.removeExpired(this.breaches, (effect) => currentTime - effect.startedAt <= BREACH_MS);
     this.removeExpired(this.specialPulses, (effect) => currentTime - effect.startedAt <= SPECIAL_PULSE_MS);
     if (this.levelUp && currentTime - this.levelUp.startedAt > LEVEL_UP_MS) this.levelUp = null;
+  }
+
+  private finishProjectiles(currentTime: number): void {
+    let writeIndex = 0;
+    for (const shot of this.shots) {
+      if (currentTime - shot.startedAt >= PROJECTILE_MS) {
+        this.pushBounded(
+          this.impacts,
+          { ...shot.destination, startedAt: shot.startedAt + PROJECTILE_MS },
+          MAX_IMPACTS,
+        );
+      } else {
+        this.shots[writeIndex++] = shot;
+      }
+    }
+    this.shots.length = writeIndex;
   }
 
   private removeExpired<T>(items: T[], keep: (item: T) => boolean): void {
@@ -468,6 +504,27 @@ export class CanvasRenderer {
       this.context.fill();
       this.context.shadowBlur = 0;
     }
+  }
+
+  private drawImpacts(currentTime: number): void {
+    for (const impact of this.impacts) {
+      const progress = clamp((currentTime - impact.startedAt) / IMPACT_MS, 0, 1);
+      this.context.fillStyle = COLORS.impact;
+      this.context.globalAlpha = (1 - progress) * (this.settings.reducedMotion ? 0.4 : 0.8);
+      this.context.shadowColor = COLORS.projectile;
+      this.context.shadowBlur = this.settings.reducedMotion ? 0 : 8;
+      this.context.beginPath();
+      this.context.arc(
+        impact.x,
+        impact.y,
+        3 + progress * (this.settings.reducedMotion ? 3 : 9),
+        0,
+        Math.PI * 2,
+      );
+      this.context.fill();
+    }
+    this.context.globalAlpha = 1;
+    this.context.shadowBlur = 0;
   }
 
   private drawExplosions(currentTime: number): void {

@@ -53,11 +53,16 @@ button:hover {
 
 button:focus-visible,
 input:focus-visible,
-canvas:focus-visible,
-.is-focused {
+button.is-focused,
+input.is-focused {
   outline: 3px solid #fff;
   outline-offset: 3px;
   box-shadow: 0 0 0 6px rgba(75, 231, 255, 0.35);
+}
+
+canvas:focus-visible,
+canvas.is-focused {
+  outline: none;
 }
 
 .app-shell {
@@ -329,6 +334,24 @@ progress.is-critical::-moz-progress-bar { background: var(--red); }
   overflow: hidden;
   border: 1px solid rgba(75, 231, 255, 0.3);
   background: #020711;
+}
+
+.canvas-wrap:focus-within {
+  border-color: #fff;
+  box-shadow:
+    inset 0 0 0 3px #fff,
+    inset 0 0 0 6px rgba(75, 231, 255, 0.35);
+}
+
+.canvas-wrap:focus-within::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  box-shadow:
+    inset 0 0 0 3px #fff,
+    inset 0 0 0 6px rgba(75, 231, 255, 0.35);
+  pointer-events: none;
 }
 
 canvas {

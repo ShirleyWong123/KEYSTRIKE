@@ -24,6 +24,13 @@ describe('curated word banks', () => {
     expect(selectWord('easy', 1, excludedWords, ['c', 'd'], () => 0)).toBe('cat');
   });
 
+  it('matches active initials without regard to input case', () => {
+    const candidates = ['cat', 'dog'];
+    const excludedWords = WORD_BANKS.easy.filter((word) => !candidates.includes(word));
+
+    expect(selectWord('easy', 1, excludedWords, ['C'], () => 0)).toBe('dog');
+  });
+
   it('applies the boosted long-word weight at its exact selection boundary', () => {
     const candidates = ['airport', 'borderless'];
     const excludedWords = WORD_BANKS.hard.filter((word) => !candidates.includes(word));

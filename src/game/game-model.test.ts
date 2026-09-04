@@ -68,6 +68,22 @@ describe('GameModel lifecycle', () => {
     expect(model.snapshot()).toMatchObject({ phase: 'playing', activeMs: 0 });
   });
 
+  it('uses the target manager measurement for the complete tutorial label', () => {
+    const measured = { width: 116, height: 42 };
+    const manager = new TargetManager(() => 0.5, () => measured);
+    const model = new GameModel(manager, { autoSpawn: false });
+
+    model.start(settings('easy'));
+
+    expect(model.snapshot().targets[0]).toMatchObject({
+      word: 'NOVA',
+      width: measured.width,
+      height: measured.height,
+      x: (480 - measured.width) / 2,
+      y: -measured.height,
+    });
+  });
+
   it('consumes only the countdown remainder when an update crosses into combat', () => {
     const model = new GameModel();
     model.start(settings());
@@ -589,7 +605,90 @@ describe('GameModel chronological progression', () => {
   });
 });
 
+describe('GameModel label geometry over time', () => {
+  it('preserves measured margins and gaps when random 0.34 spawns quiet behind tutorial NOVA', () => {
+    const measured = (word: string) => ({ width: Math.max(74, word.length * 10 + 36), height: 42 });
+    const manager = new TargetManager(() => 0.34, measured);
+    const model = new GameModel(manager, { random: () => 0.34 });
+    model.start(settings('easy'));
+    model.beginCombat();
+    model.update(2_800);
+
+    expect(model.snapshot().targets.map(({ word }) => word)).toEqual(['NOVA', 'quiet']);
+    expect(model.snapshot().targets[0]).toMatchObject(measured('NOVA'));
+
+    const assertGeometry = (targets: readonly Target[]): void => {
+      for (const current of targets) {
+        expect(current.x).toBeGreaterThanOrEqual(16);
+        expect(current.x + current.width).toBeLessThanOrEqual(464);
+      }
+      for (let first = 0; first < targets.length; first += 1) {
+        for (let second = first + 1; second < targets.length; second += 1) {
+          const a = targets[first]!;
+          const b = targets[second]!;
+          const horizontallySeparated = a.x + a.width + 12 <= b.x || b.x + b.width + 12 <= a.x;
+          const verticallySeparated = a.y + a.height + 12 <= b.y || b.y + b.height + 12 <= a.y;
+          expect(horizontallySeparated || verticallySeparated).toBe(true);
+        }
+      }
+    };
+
+    assertGeometry(model.snapshot().targets);
+    for (let elapsed = 0; elapsed < 20_000; elapsed += 250) {
+      model.update(250);
+      assertGeometry(model.snapshot().targets);
+    }
+  });
+});
+
 describe('GameModel chronological breaches', () => {
+  it('reconciles the final level when fatal breaches land exactly on a 45-second boundary', () => {
+    const model = new GameModel(new TargetManager(() => 0), { autoSpawn: false });
+    model.start(settings());
+    model.beginCombat();
+    model.injectTarget({ ...model.snapshot().targets[0]!, speed: 0 });
+    model.update(44_000);
+    for (let id = 2_010; id < 2_015; id += 1) {
+      model.injectTarget(target({ id, word: 'a', y: 660, height: 20, speed: 40 }));
+    }
+
+    model.update(1_000);
+
+    expect(model.snapshot()).toMatchObject({
+      phase: 'gameover',
+      activeMs: 45_000,
+      level: 2,
+      shield: 0,
+      missedWords: 5,
+    });
+    expect(model.drainEvents()).toContainEqual({ type: 'level-up', level: 2 });
+  });
+
+  it('suppresses a newly due spawn when fatal breaches land on the level-11 boundary', () => {
+    let spawnCalls = 0;
+    const model = new GameModel(new TargetManager(() => 0), {
+      autoSpawn: true,
+      random: () => 1,
+      spawnTarget: () => {
+        spawnCalls += 1;
+        return null;
+      },
+    });
+    model.start(settings());
+    model.beginCombat();
+    model.injectTarget({ ...model.snapshot().targets[0]!, speed: 0 });
+    model.update(449_000);
+    for (let id = 2_020; id < 2_025; id += 1) {
+      model.injectTarget(target({ id, word: 'a', y: 660, height: 20, speed: 40 }));
+    }
+    const callsBeforeFatalBoundary = spawnCalls;
+
+    model.update(1_000);
+
+    expect(model.snapshot()).toMatchObject({ phase: 'gameover', activeMs: 450_000, level: 11, shield: 0 });
+    expect(spawnCalls).toBe(callsBeforeFatalBoundary);
+  });
+
   it('stops a large frozen update at simultaneous fatal breaches just like smaller slices', () => {
     const run = (chunks: readonly number[]) => {
       const model = new GameModel(new TargetManager(() => 0), { autoSpawn: false });

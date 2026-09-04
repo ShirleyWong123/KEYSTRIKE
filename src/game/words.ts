@@ -29,6 +29,9 @@ type Exclusions = Iterable<string>;
 const asSet = (values: Exclusions): ReadonlySet<string> =>
   values instanceof Set ? values : new Set(values);
 
+const asLowercaseSet = (values: Exclusions): ReadonlySet<string> =>
+  new Set([...values].map((value) => value.toLowerCase()));
+
 /** Select a legal word, preferring an initial that is not already active. */
 export const selectWord = (
   difficulty: Difficulty,
@@ -38,7 +41,7 @@ export const selectWord = (
   random: () => number = Math.random,
 ): string | null => {
   const excluded = asSet(excludedWords);
-  const initials = asSet(excludedInitials);
+  const initials = asLowercaseSet(excludedInitials);
   const bank = WORD_BANKS[difficulty];
   const [minimum, maximum] = RANGES[difficulty];
   const pressure = LEVELS[Math.min(LEVELS.length, Math.max(1, Math.floor(level))) - 1] ?? LEVELS[0]!;

@@ -246,18 +246,7 @@ export class GameModel implements GameModelTestApi {
 
   private createTutorialTarget(difficulty: Difficulty): Target {
     const word = tutorialWordFor(difficulty);
-    return {
-      id: 1,
-      word,
-      typed: 0,
-      x: 240 - (word.length * 10) / 2,
-      y: -36,
-      width: word.length * 10,
-      height: 36,
-      speed: LEVELS[0].speed * 0.7,
-      kind: 'normal',
-      tutorial: true,
-    };
+    return this.targetManager.createTutorialTarget(difficulty, word);
   }
 
   private handleLetter(letter: string): void {
@@ -297,19 +286,24 @@ export class GameModel implements GameModelTestApi {
       this.activeMs += segmentMs;
       this.spawnElapsedMs += segmentMs;
       this.freezeRemainingMs = Math.max(0, this.freezeExpiresAtActiveMs - this.activeMs);
+      this.reconcileLevel();
       remainingMs -= segmentMs;
     }
     if (this.phase === 'playing') this.processProgressionBoundaries();
   }
 
   private processProgressionBoundaries(): void {
+    this.reconcileLevel();
+    this.advanceSpawnSchedule();
+  }
+
+  private reconcileLevel(): void {
     const nextLevel = levelForActiveMs(this.activeMs);
     for (let crossedLevel = this.level + 1; crossedLevel <= nextLevel; crossedLevel += 1) {
       this.events.push({ type: 'level-up', level: crossedLevel });
     }
     this.level = nextLevel;
     this.freezeRemainingMs = Math.max(0, this.freezeExpiresAtActiveMs - this.activeMs);
-    this.advanceSpawnSchedule();
   }
 
   private msUntilNextLevelBoundary(): number {

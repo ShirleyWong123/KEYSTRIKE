@@ -53,26 +53,37 @@ const settings = (): GameSettings => ({
   reducedMotion: false,
 });
 
-const createHarness = () => {
+const createHarness = ({ beginCombat = true }: { beginCombat?: boolean } = {}) => {
   const frames = new FrameHarness();
   const model = new GameModel(new TargetManager(() => 0), { autoSpawn: false });
   model.start(settings());
-  model.beginCombat();
+  if (beginCombat) model.beginCombat();
   const consumedByRenderer: Array<readonly GameEvent[]> = [];
   const consumedByAudio: Array<readonly GameEvent[]> = [];
   const renderer = {
     consume: vi.fn((events: readonly GameEvent[]) => { consumedByRenderer.push(events); }),
     render: vi.fn(),
     resize: vi.fn(),
+    resetPresentation: vi.fn(),
   };
   const audio = {
     consume: vi.fn((events: readonly GameEvent[]) => { consumedByAudio.push(events); }),
     dispose: vi.fn(),
+    pausePresentation: vi.fn(),
+    resumeFromGesture: vi.fn(),
+    resetPresentation: vi.fn(),
   };
   const shell = { update: vi.fn() };
   const parts = { model, renderer, audio, shell } satisfies RuntimeParts;
   const runtime = createKeystrikeRuntime(parts, frames.environment);
   return { frames, model, renderer, audio, shell, runtime, consumedByRenderer, consumedByAudio };
+};
+
+const advanceFrames = (frames: FrameHarness, fromMs: number, toMs: number, hz = 60): void => {
+  const frameMs = 1_000 / hz;
+  for (let timestamp = fromMs + frameMs; timestamp <= toMs + 1e-9; timestamp += frameMs) {
+    frames.frame(timestamp);
+  }
 };
 
 const advanceAtHz = (hz: number): { snapshot: GameSnapshot; renders: number } => {
@@ -165,6 +176,46 @@ describe('fixed-step browser runtime', () => {
     expect(shell.update).toHaveBeenCalled();
   });
 
+  it('cancels pending shot audio on pause and resumes audio only from the Escape gesture', () => {
+    const { frames, model, audio } = createHarness();
+    model.injectTarget({
+      id: 191,
+      word: 'pilot',
+      typed: 0,
+      x: 120,
+      y: 400,
+      width: 100,
+      height: 42,
+      speed: 0,
+      kind: 'normal',
+    });
+    frames.keyboardTarget.dispatchEvent(new KeyboardEvent('keydown', { key: 'p' }));
+
+    frames.keyboardTarget.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    expect(audio.pausePresentation).toHaveBeenCalledOnce();
+    expect(audio.resumeFromGesture).not.toHaveBeenCalled();
+
+    frames.windowTarget.dispatchEvent(new Event('focus'));
+    expect(audio.resumeFromGesture).not.toHaveBeenCalled();
+
+    frames.keyboardTarget.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    expect(audio.resumeFromGesture).toHaveBeenCalledOnce();
+  });
+
+  it.each(['restart', 'menu'] as const)('clears presentation pools on pause to %s', (destination) => {
+    const { frames, model, renderer, audio } = createHarness();
+    frames.frame(0);
+    frames.keyboardTarget.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    expect(model.snapshot().phase).toBe('paused');
+
+    if (destination === 'restart') model.restart();
+    else model.returnToMenu();
+    frames.frame(LOGIC_STEP_MS);
+
+    expect(renderer.resetPresentation).toHaveBeenCalledOnce();
+    expect(audio.resetPresentation).toHaveBeenCalledOnce();
+  });
+
   it.each([
     ['Alt', { altKey: true }],
     ['Control', { ctrlKey: true }],
@@ -207,6 +258,45 @@ describe('fixed-step browser runtime', () => {
     const blurred = createHarness();
     blurred.frames.windowTarget.dispatchEvent(new Event('blur'));
     expect(blurred.model.snapshot().phase).toBe('paused');
+  });
+
+  it('freezes countdown while the window is blurred and resumes only after focus returns', () => {
+    const { frames, model } = createHarness({ beginCombat: false });
+    frames.frame(0);
+    advanceFrames(frames, 0, 1_000);
+    const beforeBlur = model.snapshot();
+
+    frames.windowTarget.dispatchEvent(new Event('blur'));
+    advanceFrames(frames, 1_000, 5_000);
+
+    expect(model.snapshot()).toEqual(beforeBlur);
+    frames.windowTarget.dispatchEvent(new Event('focus'));
+    advanceFrames(frames, 5_000, 7_100);
+    expect(model.snapshot().phase).toBe('playing');
+    expect(model.snapshot().activeMs).toBeLessThan(150);
+  });
+
+  it('freezes countdown while hidden and does not resume while the window remains blurred', () => {
+    const { frames, model } = createHarness({ beginCombat: false });
+    frames.frame(0);
+    advanceFrames(frames, 0, 1_000);
+    const beforeInactivity = model.snapshot();
+
+    frames.visibilityState = 'hidden';
+    frames.documentTarget.dispatchEvent(new Event('visibilitychange'));
+    advanceFrames(frames, 1_000, 3_000);
+    expect(model.snapshot()).toEqual(beforeInactivity);
+
+    frames.windowTarget.dispatchEvent(new Event('blur'));
+    frames.visibilityState = 'visible';
+    frames.documentTarget.dispatchEvent(new Event('visibilitychange'));
+    advanceFrames(frames, 3_000, 5_000);
+    expect(model.snapshot()).toEqual(beforeInactivity);
+
+    frames.windowTarget.dispatchEvent(new Event('focus'));
+    advanceFrames(frames, 5_000, 7_100);
+    expect(model.snapshot().phase).toBe('playing');
+    expect(model.snapshot().activeMs).toBeLessThan(150);
   });
 
   it('forwards resize and removes every global listener on disposal', () => {

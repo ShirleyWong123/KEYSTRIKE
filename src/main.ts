@@ -24,8 +24,8 @@ export interface RuntimeEnvironment {
 
 export interface RuntimeParts {
   model: GameModel;
-  renderer: Pick<CanvasRenderer, 'consume' | 'render' | 'resize'>;
-  audio: Pick<AudioEngine, 'consume' | 'dispose'>;
+  renderer: Pick<CanvasRenderer, 'consume' | 'render' | 'resize' | 'resetPresentation'>;
+  audio: Pick<AudioEngine, 'consume' | 'dispose' | 'pausePresentation' | 'resumeFromGesture' | 'resetPresentation'>;
   shell: Pick<AppShell, 'update'>;
 }
 
@@ -65,6 +65,8 @@ export const createKeystrikeRuntime = (
   let accumulatorMs = 0;
   let disposed = false;
   let nextDebugTargetId = 900_000;
+  let windowFocused = true;
+  let documentVisible = environment.getVisibilityState() !== 'hidden';
 
   const flushEvents = (): void => {
     const drained = model.drainEvents();
@@ -73,29 +75,48 @@ export const createKeystrikeRuntime = (
     audio.consume(events);
   };
 
-  const synchronizePhase = (phase: GameSnapshot['phase']): void => {
+  const synchronizePhase = (phase: GameSnapshot['phase'], fromUserGesture = false): void => {
     if (phase === lastPhase) return;
+    const previousPhase = lastPhase;
+    if (phase === 'paused') audio.pausePresentation();
+    if (phase === 'playing' && previousPhase === 'paused' && fromUserGesture) audio.resumeFromGesture();
+    if (phase === 'countdown' || phase === 'menu') {
+      renderer.resetPresentation();
+      audio.resetPresentation();
+    }
     accumulatorMs = 0;
     lastTimestamp = environment.now();
     lastPhase = phase;
   };
 
-  const publish = (): GameSnapshot => {
+  const publish = (fromUserGesture = false): GameSnapshot => {
     flushEvents();
     const snapshot = model.snapshot();
     shell.update(snapshot);
-    synchronizePhase(snapshot.phase);
+    synchronizePhase(snapshot.phase, fromUserGesture);
     return snapshot;
   };
 
   const frame: FrameRequestCallback = (timestamp) => {
     if (disposed) return;
+    if (!windowFocused || !documentVisible) {
+      accumulatorMs = 0;
+      lastTimestamp = Number.isFinite(timestamp) ? timestamp : environment.now();
+      const snapshot = model.snapshot();
+      shell.update(snapshot);
+      renderer.render(snapshot, 0);
+      animationFrame = environment.requestAnimationFrame(frame);
+      return;
+    }
     const phaseAtStart = model.snapshot().phase;
-    if (lastTimestamp === null || phaseAtStart !== lastPhase) {
+    const phaseChanged = phaseAtStart !== lastPhase;
+    if (phaseChanged) {
       if (lastPhase === 'menu' && phaseAtStart !== 'menu') renderer.resize();
+      synchronizePhase(phaseAtStart);
+    }
+    if (lastTimestamp === null || phaseChanged) {
       accumulatorMs = 0;
       lastTimestamp = timestamp;
-      lastPhase = phaseAtStart;
     } else {
       const elapsed = Number.isFinite(timestamp) ? Math.max(0, timestamp - lastTimestamp) : 0;
       lastTimestamp = Number.isFinite(timestamp) ? Math.max(lastTimestamp, timestamp) : lastTimestamp;
@@ -132,7 +153,7 @@ export const createKeystrikeRuntime = (
       ctrlKey: rawEvent.ctrlKey,
       metaKey: rawEvent.metaKey,
     });
-    const after = publish();
+    const after = publish(true);
     if (after.phase !== before || isGameplayLetter) rawEvent.preventDefault();
   };
 
@@ -142,14 +163,32 @@ export const createKeystrikeRuntime = (
     publish();
   };
 
+  const synchronizeActivity = (): void => {
+    accumulatorMs = 0;
+    lastTimestamp = environment.now();
+    if (!windowFocused || !documentVisible) pauseActiveRun();
+  };
+
+  const onBlur = (): void => {
+    windowFocused = false;
+    synchronizeActivity();
+  };
+
+  const onFocus = (): void => {
+    windowFocused = true;
+    synchronizeActivity();
+  };
+
   const onVisibilityChange = (): void => {
-    if (environment.getVisibilityState() === 'hidden') pauseActiveRun();
+    documentVisible = environment.getVisibilityState() !== 'hidden';
+    synchronizeActivity();
   };
 
   const onResize = (): void => { renderer.resize(); };
 
   environment.keyboardTarget.addEventListener('keydown', onKeyDown as Listener);
-  environment.windowTarget.addEventListener('blur', pauseActiveRun as Listener);
+  environment.windowTarget.addEventListener('blur', onBlur as Listener);
+  environment.windowTarget.addEventListener('focus', onFocus as Listener);
   environment.windowTarget.addEventListener('resize', onResize as Listener);
   environment.documentTarget.addEventListener('visibilitychange', onVisibilityChange as Listener);
   animationFrame = environment.requestAnimationFrame(frame);
@@ -212,7 +251,8 @@ export const createKeystrikeRuntime = (
       if (animationFrame !== null) environment.cancelAnimationFrame(animationFrame);
       animationFrame = null;
       environment.keyboardTarget.removeEventListener('keydown', onKeyDown as Listener);
-      environment.windowTarget.removeEventListener('blur', pauseActiveRun as Listener);
+      environment.windowTarget.removeEventListener('blur', onBlur as Listener);
+      environment.windowTarget.removeEventListener('focus', onFocus as Listener);
       environment.windowTarget.removeEventListener('resize', onResize as Listener);
       environment.documentTarget.removeEventListener('visibilitychange', onVisibilityChange as Listener);
       audio.dispose();

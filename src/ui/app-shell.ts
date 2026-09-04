@@ -85,7 +85,9 @@ export class AppShell {
     this.bindDialogFocus();
     this.bindFocusState();
     this.audio.setEnabled(this.settings.soundEnabled);
-    this.render(this.model.snapshot());
+    const initialSnapshot = this.model.snapshot();
+    this.render(initialSnapshot);
+    if (initialSnapshot.phase === 'menu') this.radios().find(({ checked }) => checked)?.focus();
   }
 
   update(snapshot: GameSnapshot = this.model.snapshot()): void {
@@ -255,6 +257,7 @@ export class AppShell {
   private bindActions(): void {
     this.required<HTMLButtonElement>('[data-action="start"]').addEventListener('click', () => this.startRun());
     this.continueButton.addEventListener('click', () => {
+      this.audio.resumeFromGesture();
       this.model.resume();
       this.render();
       this.canvas.focus();
@@ -262,7 +265,8 @@ export class AppShell {
     for (const button of this.root.querySelectorAll<HTMLButtonElement>('[data-action="restart"]')) {
       button.addEventListener('click', () => {
         this.audio.setEnabled(this.settings.soundEnabled);
-        this.audio.unlock();
+        this.audio.resetPresentation();
+        this.audio.resumeFromGesture();
         this.model.restart();
         this.render();
         this.canvas.focus();
@@ -270,6 +274,7 @@ export class AppShell {
     }
     for (const button of this.root.querySelectorAll<HTMLButtonElement>('[data-action="menu"]')) {
       button.addEventListener('click', () => {
+        this.audio.resetPresentation();
         this.model.returnToMenu();
         this.render();
       });

@@ -71,6 +71,18 @@ describe('target placement and movement', () => {
     expect(result.breached).toEqual([]);
   });
 
+  it('keeps a faster trailing label twelve pixels behind a slower overlapping trajectory', () => {
+    const manager = new TargetManager(() => 0.5, measure);
+    const leader = target({ id: 1, word: 'nova', x: 200, y: 100, width: 80, speed: 19.6 });
+    const trailer = target({ id: 2, word: 'quiet', x: 160, y: 52, width: 80, speed: 28 });
+
+    const result = manager.update([leader, trailer], 10_000, 1);
+    const movedLeader = result.active.find(({ id }) => id === leader.id)!;
+    const movedTrailer = result.active.find(({ id }) => id === trailer.id)!;
+
+    expect(movedTrailer.y + movedTrailer.height + 12).toBeLessThanOrEqual(movedLeader.y);
+  });
+
   it.each([Number.NaN, Number.POSITIVE_INFINITY, -100])('normalizes invalid deltaMs (%s) to zero', (deltaMs) => {
     const manager = new TargetManager(() => 0.5, measure);
     const result = manager.update([target({ speed: 40, y: 100 })], deltaMs, 1);

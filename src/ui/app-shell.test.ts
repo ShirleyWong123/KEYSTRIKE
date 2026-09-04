@@ -43,10 +43,12 @@ const setup = () => {
   const model = new GameModel();
   const unlock = vi.fn();
   const setEnabled = vi.fn();
-  const audio = { unlock, setEnabled } as unknown as AudioEngine;
+  const resumeFromGesture = vi.fn();
+  const resetPresentation = vi.fn();
+  const audio = { unlock, setEnabled, resumeFromGesture, resetPresentation } as unknown as AudioEngine;
   const storage = new StorageAdapter(memoryStorage(), false);
   const shell = new AppShell(root, model, audio, storage);
-  return { root, model, audio, storage, shell, unlock, setEnabled };
+  return { root, model, audio, storage, shell, unlock, setEnabled, resumeFromGesture, resetPresentation };
 };
 
 const key = (element: Element, value: string) => {
@@ -58,6 +60,14 @@ beforeEach(() => {
 });
 
 describe('AppShell menu', () => {
+  it('focuses the initially selected difficulty after mounting the menu', () => {
+    const { root } = setup();
+    const selected = root.querySelector<HTMLInputElement>('input[name="difficulty"]:checked');
+
+    expect(document.activeElement).toBe(selected);
+    expect(selected?.classList.contains('is-focused')).toBe(true);
+  });
+
   it('uses semantic controls and explains every difficulty with length and recommended WPM', () => {
     const { root } = setup();
 
@@ -179,7 +189,7 @@ describe('AppShell game screens', () => {
   });
 
   it('moves focus into pause and restores it to the game surface on continue', () => {
-    const { root, model, shell } = setup();
+    const { root, model, shell, resumeFromGesture } = setup();
     root.querySelector<HTMLButtonElement>('[data-action="start"]')!.click();
     model.beginCombat();
     model.pause();
@@ -193,6 +203,7 @@ describe('AppShell game screens', () => {
     continueButton.click();
     expect(model.snapshot().phase).toBe('playing');
     expect(document.activeElement).toBe(shell.canvas);
+    expect(resumeFromGesture).toHaveBeenCalledOnce();
   });
 
   it('restores focus when update observes an Escape-driven resume', () => {
@@ -242,7 +253,7 @@ describe('AppShell game screens', () => {
   });
 
   it('supports restart and menu actions from the pause dialog', () => {
-    const { root, model, shell } = setup();
+    const { root, model, shell, resumeFromGesture, resetPresentation } = setup();
     root.querySelector<HTMLInputElement>('input[value="hard"]')!.click();
     root.querySelector<HTMLButtonElement>('[data-action="start"]')!.click();
     model.beginCombat();
@@ -252,12 +263,15 @@ describe('AppShell game screens', () => {
     root.querySelector<HTMLButtonElement>('[data-action="restart"]')!.click();
     expect(model.snapshot()).toMatchObject({ phase: 'countdown', score: 0 });
     expect(model.snapshot().targets[0]?.word).toBe('VECTOR');
+    expect(resetPresentation).toHaveBeenCalledOnce();
+    expect(resumeFromGesture).toHaveBeenCalledOnce();
 
     model.beginCombat();
     model.pause();
     shell.render();
     root.querySelector<HTMLButtonElement>('[data-action="menu"]')!.click();
     expect(model.snapshot().phase).toBe('menu');
+    expect(resetPresentation).toHaveBeenCalledTimes(2);
   });
 
   it('shows all run metrics and the high score for the selected difficulty', () => {
@@ -332,6 +346,14 @@ describe('AppShell game screens', () => {
 });
 
 describe('short-height layout', () => {
+  it('draws the canvas focus indicator inside the clipped battlefield frame', () => {
+    const styles = readFileSync(resolve(process.cwd(), 'src/styles.css'), 'utf8');
+
+    expect(styles).toMatch(/\.canvas-wrap:focus-within\s*{[^}]*box-shadow:\s*inset/s);
+    expect(styles).toMatch(/\.canvas-wrap:focus-within::after\s*{[^}]*position:\s*absolute[^}]*inset:\s*0[^}]*box-shadow:\s*inset[^}]*pointer-events:\s*none/s);
+    expect(styles).toMatch(/canvas:(?:focus-visible|focus)[^{]*,[^{]*canvas\.is-focused\s*{[^}]*outline:\s*none/s);
+  });
+
   it('only detaches the HUD when the viewport is wide enough for a side column', () => {
     const styles = readFileSync(resolve(process.cwd(), 'src/styles.css'), 'utf8');
 

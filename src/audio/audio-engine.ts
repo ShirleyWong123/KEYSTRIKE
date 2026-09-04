@@ -34,6 +34,7 @@ export interface AudioContextLike {
   currentTime: number;
   destination: AudioNodeLike;
   resume(): Promise<void>;
+  suspend(): Promise<void>;
   close(): Promise<void>;
   createOscillator(): OscillatorLike;
   createBufferSource(): BufferSourceLike;
@@ -44,6 +45,7 @@ export interface AudioContextLike {
 export interface AudioEngineOptions {
   contextFactory?: () => AudioContextLike | null;
   enabled?: boolean;
+  random?: () => number;
 }
 
 const DEFAULT_SAMPLE_RATE = 44_100;
@@ -72,21 +74,28 @@ const browserContextFactory = (): AudioContextLike | null => {
 
 export class AudioEngine {
   private readonly contextFactory: () => AudioContextLike | null;
+  private readonly random: () => number;
   private context: AudioContextLike | null = null;
   private enabled: boolean;
   private unlocked = false;
   private unlockPending = false;
   private unlockAttempt = 0;
   private disposed = false;
+  private presentationPaused = false;
   private readonly activeSources = new Set<SourceRecord>();
 
-  constructor({ contextFactory = browserContextFactory, enabled = true }: AudioEngineOptions = {}) {
+  constructor({ contextFactory = browserContextFactory, enabled = true, random = Math.random }: AudioEngineOptions = {}) {
     this.contextFactory = contextFactory;
     this.enabled = enabled;
+    this.random = random;
   }
 
   unlock(): void {
-    if (this.disposed || this.unlocked || this.unlockPending) return;
+    if (this.disposed || this.unlockPending) return;
+    if (this.unlocked) {
+      if (this.context && !this.presentationPaused) this.resumeSafely(this.context);
+      return;
+    }
 
     let context: AudioContextLike | null;
     try {
@@ -115,9 +124,34 @@ export class AudioEngine {
     if (!enabled) this.cancelAll(this.currentTime(this.context));
   }
 
+  pausePresentation(): void {
+    if (this.disposed) return;
+    this.presentationPaused = true;
+    const context = this.context;
+    this.cancelAll(this.currentTime(context));
+    if (context) this.suspendSafely(context);
+  }
+
+  resumeFromGesture(): void {
+    if (this.disposed) return;
+    this.presentationPaused = false;
+    const context = this.context;
+    if (!context || !this.unlocked) {
+      this.unlock();
+      return;
+    }
+    this.resumeSafely(context);
+  }
+
+  resetPresentation(): void {
+    if (this.disposed) return;
+    this.presentationPaused = false;
+    this.cancelAll(this.currentTime(this.context));
+  }
+
   consume(events: readonly GameEvent[]): void {
     const context = this.context;
-    if (this.disposed || !this.unlocked || !this.enabled || !context) return;
+    if (this.disposed || this.presentationPaused || !this.unlocked || !this.enabled || !context) return;
 
     for (const event of events) {
       try {
@@ -125,8 +159,9 @@ export class AudioEngine {
           case 'shot':
             {
               const shotStart = this.currentTime(context);
-              this.tone(context, 'sine', 680, 0.12, 0.05, shotStart);
-              this.tone(context, 'sine', 920, 0.06, 0.045, shotStart + PROJECTILE_MS / 1000);
+              const shotPitch = 680 + (this.randomUnit() - 0.5) * 80;
+              this.tone(context, 'sine', shotPitch, 0.12, 0.05, shotStart);
+              this.tone(context, 'sine', shotPitch + 240, 0.06, 0.045, shotStart + PROJECTILE_MS / 1000);
             }
             break;
           case 'error':
@@ -136,7 +171,12 @@ export class AudioEngine {
             this.noise(context, 0.18, 0.22);
             break;
           case 'level-up':
-            this.tone(context, 'triangle', 440, 0.14, 0.16);
+            {
+              const phraseStart = this.currentTime(context);
+              this.tone(context, 'triangle', 440, 0.1, 0.14, phraseStart);
+              this.tone(context, 'triangle', 554, 0.12, 0.14, phraseStart + 0.06);
+              this.tone(context, 'triangle', 659, 0.14, 0.16, phraseStart + 0.12);
+            }
             break;
           case 'breach':
             this.tone(context, 'square', 80, 0.18, 0.2);
@@ -227,6 +267,7 @@ export class AudioEngine {
     if (this.disposed || this.context !== context || this.unlockAttempt !== attempt) return;
     this.unlockPending = false;
     this.unlocked = true;
+    if (this.presentationPaused) this.suspendSafely(context);
   }
 
   private failUnlock(context: AudioContextLike, attempt: number): void {
@@ -262,11 +303,36 @@ export class AudioEngine {
     }
   }
 
+  private randomUnit(): number {
+    try {
+      const value = this.random();
+      return Number.isFinite(value) ? Math.min(1, Math.max(0, value)) : 0.5;
+    } catch {
+      return 0.5;
+    }
+  }
+
   private closeSafely(context: AudioContextLike): void {
     try {
       void Promise.resolve(context.close()).catch(NOOP);
     } catch {
       // Closing an already-invalid browser context is harmless to gameplay.
+    }
+  }
+
+  private suspendSafely(context: AudioContextLike): void {
+    try {
+      void Promise.resolve(context.suspend()).catch(NOOP);
+    } catch {
+      // Suspension is best effort; active sources were already cancelled.
+    }
+  }
+
+  private resumeSafely(context: AudioContextLike): void {
+    try {
+      void Promise.resolve(context.resume()).catch(NOOP);
+    } catch {
+      // A rejected resume leaves gameplay running silently until the next gesture.
     }
   }
 

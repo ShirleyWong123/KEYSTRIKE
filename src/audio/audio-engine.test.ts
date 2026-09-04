@@ -72,9 +72,11 @@ class FakeAudioContext implements AudioContextLike {
   readonly gains: FakeGain[] = [];
   closed = 0;
   resumed = 0;
+  suspended = 0;
   buffers = 0;
 
   resume(): Promise<void> { this.resumed += 1; return Promise.resolve(); }
+  suspend(): Promise<void> { this.suspended += 1; return Promise.resolve(); }
   close(): Promise<void> { this.closed += 1; return Promise.resolve(); }
   createOscillator(): FakeSource {
     const source = new FakeSource();
@@ -228,6 +230,19 @@ describe('AudioEngine', () => {
     expect(context.gains.map((gain) => gain.gain.values[0]!.value)).toEqual([0.12, 0.06]);
   });
 
+  it('varies shot pitch slightly and deterministically from injected randomness', async () => {
+    const context = new FakeAudioContext();
+    const random = vi.fn(() => 0.25);
+    const engine = new AudioEngine({ contextFactory: () => context, random });
+    engine.unlock();
+    await settleUnlock();
+
+    engine.consume([{ type: 'shot', targetId: 1, progress: 0 }]);
+
+    expect(random).toHaveBeenCalledTimes(1);
+    expect(context.sources.map((source) => source.frequency.values[0]!.value)).toEqual([660, 900]);
+  });
+
   it('uses one captured shot base time when the audio clock advances during scheduling', async () => {
     const context = new AdvancingClockContext();
     const engine = new AudioEngine({ contextFactory: () => context });
@@ -253,12 +268,26 @@ describe('AudioEngine', () => {
     engine.consume(events.slice(1));
     const context = contexts[0]!;
 
-    expect(context.sources).toHaveLength(4);
+    expect(context.sources).toHaveLength(6);
     expect(context.sources.map((source) => source.buffer === null ? source.type : 'noise')).toEqual([
-      'sawtooth', 'noise', 'triangle', 'square',
+      'sawtooth', 'noise', 'triangle', 'triangle', 'triangle', 'square',
     ]);
-    expect(context.sources.map((source) => source.frequency.values[0]?.value)).toEqual([120, undefined, 440, 80]);
+    expect(context.sources.map((source) => source.frequency.values[0]?.value)).toEqual([
+      120, undefined, 440, 554, 659, 80,
+    ]);
     expect(context.buffers).toBe(1);
+  });
+
+  it('schedules the level-up cue as an ascending three-note phrase from one base time', async () => {
+    const context = new FakeAudioContext();
+    const engine = new AudioEngine({ contextFactory: () => context });
+    engine.unlock();
+    await settleUnlock();
+
+    engine.consume([{ type: 'level-up', level: 2 }]);
+
+    expect(context.sources.map((source) => source.frequency.values[0]!.value)).toEqual([440, 554, 659]);
+    expect(context.sources.map((source) => source.starts[0])).toEqual([4, 4.06, 4.12]);
   });
 
   it('bounds source lifetime, disconnects on ended, and safely closes once', async () => {
@@ -279,7 +308,7 @@ describe('AudioEngine', () => {
     await Promise.resolve();
     expect(context.closed).toBe(1);
     engine.consume(events);
-    expect(context.sources).toHaveLength(6);
+    expect(context.sources).toHaveLength(8);
   });
 
   it('retries later when a context factory returns null or throws', async () => {
@@ -370,6 +399,56 @@ describe('AudioEngine', () => {
       expect(source.disconnected).toBe(true);
     }
     expect(context.gains.every((gain) => gain.disconnected)).toBe(true);
+  });
+
+  it('cancels a shot and its delayed hit on pause, then resumes scheduling only from a gesture hook', async () => {
+    const { engine, contexts } = createEngine();
+    engine.unlock();
+    await settleUnlock();
+    engine.consume([{ type: 'shot', targetId: 1, progress: 0 }]);
+    const context = contexts[0]!;
+
+    engine.pausePresentation();
+    expect(context.suspended).toBe(1);
+    expect(context.sources).toHaveLength(2);
+    expect(context.sources.every((source) => source.stops.includes(context.currentTime))).toBe(true);
+    expect(context.sources.every((source) => source.disconnected)).toBe(true);
+
+    engine.consume([{ type: 'error' }]);
+    expect(context.sources).toHaveLength(2);
+
+    engine.resumeFromGesture();
+    await settleUnlock();
+    engine.consume([{ type: 'error' }]);
+    expect(context.resumed).toBe(2);
+    expect(context.sources).toHaveLength(3);
+  });
+
+  it('clears scheduled presentation sources for restart or menu without closing the reusable context', async () => {
+    const { engine, contexts } = createEngine();
+    engine.unlock();
+    await settleUnlock();
+    engine.consume([{ type: 'shot', targetId: 1, progress: 0 }]);
+    const context = contexts[0]!;
+
+    engine.resetPresentation();
+
+    expect(context.sources.every((source) => source.stops.includes(context.currentTime))).toBe(true);
+    expect(context.sources.every((source) => source.disconnected)).toBe(true);
+    expect(context.closed).toBe(0);
+  });
+
+  it('resumes a suspended reusable context when a later menu start unlocks from its gesture', async () => {
+    const { engine, contexts } = createEngine();
+    engine.unlock();
+    await settleUnlock();
+    const context = contexts[0]!;
+    engine.pausePresentation();
+    engine.resetPresentation();
+
+    engine.unlock();
+
+    expect(context.resumed).toBe(2);
   });
 
   it('disposes safely during a pending unlock and cancels scheduled sources', async () => {

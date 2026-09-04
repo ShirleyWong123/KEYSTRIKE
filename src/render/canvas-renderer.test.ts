@@ -251,6 +251,35 @@ describe('CanvasRenderer', () => {
     expect(context.calls.some(({ op, fillStyle }) => op === 'fill' && fillStyle === '#ffbd66')).toBe(false);
   });
 
+  it('turns a completed projectile into a small bounded impact flash at its target', () => {
+    const { context, renderer, setNow } = harness();
+    const state = snapshot({ targets: [target()] });
+    renderer.render(state, 0);
+    renderer.consume([{ type: 'shot', targetId: 1, progress: 1 }]);
+    context.calls.length = 0;
+
+    setNow(1_080);
+    renderer.render(state, 0);
+
+    const impact = context.calls.find(({ op, fillStyle }) => op === 'arc' && fillStyle === '#ff9d2e');
+    expect(impact?.args.slice(0, 2)).toEqual([170, 178]);
+    expect(impact?.args[2]).toBeGreaterThanOrEqual(3);
+    expect(impact?.args[2]).toBeLessThanOrEqual(12);
+    expect(context.calls.some(({ op, fillStyle }) => op === 'fill' && fillStyle === '#ffbd66')).toBe(false);
+  });
+
+  it('bounds the projectile impact pool under repeated fire', () => {
+    const { renderer, setNow } = harness();
+    renderer.render(snapshot({ targets: [target()] }), 0);
+    renderer.consume(Array.from({ length: 80 }, () => ({ type: 'shot' as const, targetId: 1, progress: 1 })));
+
+    setNow(1_080);
+    renderer.render(snapshot({ targets: [target()] }), 0);
+
+    const impacts = (renderer as unknown as { impacts: unknown[] }).impacts;
+    expect(impacts.length).toBeLessThanOrEqual(32);
+  });
+
   it('timestamps a post-frame projectile at event time instead of the previous rendered frame', () => {
     const { context, renderer, setNow } = harness();
     const state = snapshot({ targets: [target()] });
@@ -463,5 +492,39 @@ describe('CanvasRenderer', () => {
 
     expect(context.calls.filter(({ op, fillStyle }) => op === 'fill' && fillStyle === '#78efff').length).toBeLessThanOrEqual(120);
     expect(context.calls.some(({ op, fillStyle }) => op === 'fill' && fillStyle === '#ffbd66')).toBe(true);
+  });
+
+  it('clears projectile and effect pools when a run restarts or returns to menu', () => {
+    const { renderer } = harness();
+    renderer.render(snapshot({ targets: [target()] }), 0);
+    renderer.consume([
+      { type: 'shot', targetId: 1, progress: 1 },
+      { type: 'destroyed', target: target() },
+      { type: 'breach', target: target() },
+      { type: 'level-up', level: 2 },
+      { type: 'special', kind: 'freeze', affectedIds: [1] },
+      { type: 'error' },
+    ]);
+
+    renderer.resetPresentation();
+
+    const state = renderer as unknown as {
+      shots: unknown[];
+      impacts: unknown[];
+      explosions: unknown[];
+      breaches: unknown[];
+      specialPulses: unknown[];
+      knownTargets: Map<number, unknown>;
+      levelUp: unknown;
+      errorStartedAt: number;
+    };
+    expect(state.shots).toEqual([]);
+    expect(state.impacts).toEqual([]);
+    expect(state.explosions).toEqual([]);
+    expect(state.breaches).toEqual([]);
+    expect(state.specialPulses).toEqual([]);
+    expect(state.knownTargets.size).toBe(0);
+    expect(state.levelUp).toBeNull();
+    expect(state.errorStartedAt).toBe(Number.NEGATIVE_INFINITY);
   });
 });
