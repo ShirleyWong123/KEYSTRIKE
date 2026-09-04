@@ -301,7 +301,9 @@ describe('GameModel breaches', () => {
 
 describe('GameModel progression', () => {
   it('derives level from active combat time rather than score and emits crossed level events', () => {
-    const model = combatModel();
+    const model = new GameModel(new TargetManager(), { autoSpawn: false });
+    model.start(settings());
+    model.beginCombat();
     model.injectTarget(target({ id: 50, word: 'a' }));
 
     model.handleKey('a');
@@ -334,7 +336,7 @@ describe('GameModel progression', () => {
 });
 
 describe('GameModel repair specials', () => {
-  it('restores exactly twenty shield without changing combo when a repair target is completed', () => {
+  it('awards normal completion score before resolving a repair target', () => {
     const model = combatModel();
     model.injectTarget(target({ id: 51, word: 'a', y: 700, height: 20, speed: 40 }));
     model.injectTarget(target({ id: 52, word: 'b', y: 700, height: 20, speed: 40 }));
@@ -343,7 +345,13 @@ describe('GameModel repair specials', () => {
 
     model.handleKey('r');
 
-    expect(model.snapshot()).toMatchObject({ shield: 80, combo: 0, maxCombo: 0 });
+    expect(model.snapshot()).toMatchObject({
+      score: 10 + scoreForCompletion(1, 1, 0),
+      shield: 80,
+      combo: 1,
+      maxCombo: 1,
+      completedWords: 1,
+    });
     expect(model.drainEvents().filter((event) => event.type === 'special')).toEqual([
       { type: 'special', kind: 'repair', affectedIds: [] },
     ]);
@@ -351,7 +359,7 @@ describe('GameModel repair specials', () => {
 });
 
 describe('GameModel pulse specials', () => {
-  it('clears at most the four lowest normal targets and awards only twenty percent of base completion score', () => {
+  it('scores the typed pulse normally while auto-cleared normals receive only twenty percent base score', () => {
     const model = combatModel();
     model.injectTarget(target({ id: 54, word: 'a' }));
     model.handleKey('a');
@@ -364,7 +372,12 @@ describe('GameModel pulse specials', () => {
 
     model.handleKey('p');
 
-    expect(model.snapshot()).toMatchObject({ score: 65, combo: 1, maxCombo: 1 });
+    expect(model.snapshot()).toMatchObject({
+      score: 91,
+      combo: 2,
+      maxCombo: 2,
+      completedWords: 2,
+    });
     expect(model.snapshot().targets.map(({ id }) => id)).toContain(1);
     expect(model.snapshot().targets.map(({ id }) => id)).not.toEqual(expect.arrayContaining([55, 56, 57, 58, 59]));
     expect(model.drainEvents().filter((event) => event.type === 'special')).toEqual([
@@ -384,6 +397,12 @@ describe('GameModel freeze specials', () => {
     model.injectTarget(target({ id: 61, word: 'b', y: 220, speed: 40 }));
 
     model.handleKey('f');
+    expect(model.snapshot()).toMatchObject({
+      score: 10 + scoreForCompletion(1, 3, 0),
+      combo: 1,
+      maxCombo: 1,
+      completedWords: 1,
+    });
     model.update(1_000);
     expect(model.snapshot()).toMatchObject({ level: 3, freezeRemainingMs: 4_000 });
     expect(model.snapshot().targets.find(({ id }) => id === 60)?.y).toBe(120);
@@ -522,5 +541,157 @@ describe('GameModel special effects', () => {
       type: 'breach',
       target: expect.objectContaining({ id: 94, kind: 'repair' }),
     }));
+  });
+});
+
+describe('GameModel chronological progression', () => {
+  it('makes one large update equivalent to chronological slices across spawn and level boundaries', () => {
+    const spawnLevelsFor = (chunks: readonly number[]) => {
+      const levels: number[] = [];
+      let createdFirstTarget = false;
+      const model = new GameModel(new TargetManager(() => 0), {
+        autoSpawn: true,
+        random: () => 1,
+        spawnTarget: ({ level, kind = 'normal' }) => {
+          levels.push(level);
+          if (createdFirstTarget) return null;
+          createdFirstTarget = true;
+          return target({ id: 2_000, word: 'slow', y: -36, speed: 1, kind });
+        },
+      });
+      model.start(settings());
+      model.beginCombat();
+      for (const chunk of chunks) model.update(chunk);
+      return { model, levels };
+    };
+
+    const large = spawnLevelsFor([90_000]);
+    const sliced = spawnLevelsFor(Array.from({ length: 90 }, () => 1_000));
+
+    expect(large.levels).toEqual(sliced.levels);
+    expect(large.levels).toHaveLength(32);
+    expect(large.model.snapshot()).toMatchObject({ activeMs: 90_000, level: 3 });
+    expect(large.model.snapshot().targets.find(({ id }) => id === 2_000)?.y).toBeCloseTo(51.2, 10);
+    expect(large.model.snapshot().targets.find(({ id }) => id === 2_000)?.y)
+      .toBeCloseTo(sliced.model.snapshot().targets.find(({ id }) => id === 2_000)?.y ?? Number.NaN, 10);
+    expect(large.model.drainEvents().filter((event) => event.type === 'level-up')).toEqual([
+      { type: 'level-up', level: 2 },
+      { type: 'level-up', level: 3 },
+    ]);
+    large.model.update(2_149);
+    sliced.model.update(2_149);
+    expect(large.levels).toHaveLength(32);
+    expect(sliced.levels).toHaveLength(32);
+    large.model.update(1);
+    sliced.model.update(1);
+    expect(large.levels).toHaveLength(33);
+    expect(sliced.levels).toHaveLength(33);
+  });
+});
+
+describe('GameModel spawn state boundaries', () => {
+  it('does not attempt a spawn outside the playing phase', () => {
+    let spawnCalls = 0;
+    const model = new GameModel(new TargetManager(() => 0), {
+      spawnTarget: ({ kind = 'normal' }) => {
+        spawnCalls += 1;
+        return target({ id: 3_000 + spawnCalls, word: kind, kind });
+      },
+    });
+    model.start(settings());
+
+    model.attemptSpawn();
+    expect(spawnCalls).toBe(0);
+
+    model.beginCombat();
+    model.pause();
+    model.attemptSpawn();
+    expect(spawnCalls).toBe(0);
+
+    model.resume();
+    for (let id = 3_100; id < 3_105; id += 1) {
+      model.injectTarget(target({ id, word: 'a', y: 700, height: 20, speed: 40 }));
+    }
+    model.update(1_000);
+    expect(model.snapshot().phase).toBe('gameover');
+
+    model.attemptSpawn();
+    expect(spawnCalls).toBe(0);
+  });
+
+  it('does not start special cooldown when a special spawn fails', () => {
+    const attemptedKinds: string[] = [];
+    let repairAttempts = 0;
+    const model = new GameModel(new TargetManager(() => 0), {
+      autoSpawn: false,
+      random: () => 0,
+      spawnTarget: ({ kind = 'normal' }) => {
+        attemptedKinds.push(kind);
+        if (kind !== 'repair' || repairAttempts++ > 0) return target({ id: 3_200 + attemptedKinds.length, word: kind, kind });
+        return null;
+      },
+    });
+    model.start(settings());
+    model.beginCombat();
+    model.update(12_000);
+    model.injectTarget(target({ id: 3_210, word: 'a', y: 700, height: 20, speed: 40 }));
+    model.injectTarget(target({ id: 3_211, word: 'b', y: 700, height: 20, speed: 40 }));
+    model.update(1_000);
+
+    model.attemptSpawn();
+    model.attemptSpawn();
+
+    expect(attemptedKinds).toEqual(['repair', 'repair']);
+    expect(model.snapshot().targets.filter(({ kind }) => kind === 'repair')).toHaveLength(1);
+  });
+
+  it('restart resets freeze, special cooldown, and spawn scheduling state', () => {
+    const spawnAttempts: Target['kind'][] = [];
+    const model = new GameModel(new TargetManager(() => 0), {
+      autoSpawn: false,
+      random: () => 0,
+      spawnTarget: ({ kind = 'normal' }) => {
+        spawnAttempts.push(kind);
+        return target({ id: 3_300 + spawnAttempts.length, word: kind, kind, speed: 0 });
+      },
+    });
+    model.start(settings());
+    model.beginCombat();
+    model.injectTarget(target({ id: 3_340, word: 'a', y: 700, height: 20, speed: 40 }));
+    model.injectTarget(target({ id: 3_341, word: 'b', y: 700, height: 20, speed: 40 }));
+    model.update(90_000);
+    model.injectTarget(target({ id: 3_350, word: 'f', kind: 'freeze', speed: 0 }));
+    model.handleKey('f');
+    model.attemptSpawn();
+    expect(model.snapshot().freezeRemainingMs).toBe(5_000);
+    expect(model.snapshot().targets.some(({ kind }) => kind === 'repair')).toBe(true);
+
+    model.restart();
+    model.beginCombat();
+    expect(model.snapshot()).toMatchObject({ activeMs: 0, freezeRemainingMs: 0, targets: [{ tutorial: true }] });
+    model.update(12_000);
+    model.injectTarget(target({ id: 3_360, word: 'a', y: 700, height: 20, speed: 40 }));
+    model.injectTarget(target({ id: 3_361, word: 'b', y: 700, height: 20, speed: 40 }));
+    model.update(1_000);
+    model.attemptSpawn();
+
+    expect(model.snapshot().targets.some(({ kind }) => kind === 'repair')).toBe(true);
+
+    let scheduledSpawns = 0;
+    const scheduleModel = new GameModel(new TargetManager(() => 0), {
+      spawnTarget: ({ kind = 'normal' }) => {
+        scheduledSpawns += 1;
+        return target({ id: 3_400 + scheduledSpawns, word: kind, kind, speed: 0 });
+      },
+    });
+    scheduleModel.start(settings());
+    scheduleModel.beginCombat();
+    scheduleModel.update(2_799);
+    scheduleModel.restart();
+    scheduleModel.beginCombat();
+    scheduleModel.update(2_799);
+    expect(scheduledSpawns).toBe(0);
+    scheduleModel.update(1);
+    expect(scheduledSpawns).toBe(1);
   });
 });

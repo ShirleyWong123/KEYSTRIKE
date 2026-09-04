@@ -189,7 +189,7 @@ export class GameModel implements GameModelTestApi {
 
   /** Test/debug-only: attempts one ordinary target-generation opportunity. */
   attemptSpawn(): void {
-    if (!this.settings) return;
+    if (this.phase !== 'playing' || !this.settings) return;
     const level = LEVELS[this.level - 1] ?? LEVELS[0];
     if (this.targets.length >= level.maxTargets) return;
 
@@ -264,18 +264,46 @@ export class GameModel implements GameModelTestApi {
   }
 
   private advancePlaying(deltaMs: number): void {
-    const frozenMs = Math.min(deltaMs, Math.max(0, this.freezeExpiresAtActiveMs - this.activeMs));
-    if (frozenMs > 0) this.moveTargets(frozenMs, 0.5);
-    if (deltaMs > frozenMs) this.moveTargets(deltaMs - frozenMs, 1);
-    this.activeMs += deltaMs;
-    this.freezeRemainingMs = Math.max(0, this.freezeExpiresAtActiveMs - this.activeMs);
+    let remainingMs = deltaMs;
+    while (remainingMs > 0 && this.phase === 'playing') {
+      this.processProgressionBoundaries();
+      const segmentMs = Math.min(
+        remainingMs,
+        this.msUntilNextLevelBoundary(),
+        this.msUntilNextSpawnOpportunity(),
+        this.msUntilFreezeExpiry(),
+      );
+      this.moveTargets(segmentMs, this.freezeExpiresAtActiveMs > this.activeMs ? 0.5 : 1);
+      this.activeMs += segmentMs;
+      this.spawnElapsedMs += segmentMs;
+      this.freezeRemainingMs = Math.max(0, this.freezeExpiresAtActiveMs - this.activeMs);
+      remainingMs -= segmentMs;
+    }
+    if (this.phase === 'playing') this.processProgressionBoundaries();
+  }
+
+  private processProgressionBoundaries(): void {
     const nextLevel = levelForActiveMs(this.activeMs);
     for (let crossedLevel = this.level + 1; crossedLevel <= nextLevel; crossedLevel += 1) {
       this.events.push({ type: 'level-up', level: crossedLevel });
     }
     this.level = nextLevel;
-    this.spawnElapsedMs += deltaMs;
+    this.freezeRemainingMs = Math.max(0, this.freezeExpiresAtActiveMs - this.activeMs);
     this.advanceSpawnSchedule();
+  }
+
+  private msUntilNextLevelBoundary(): number {
+    return this.level < LEVELS.length ? this.level * 45_000 - this.activeMs : Number.POSITIVE_INFINITY;
+  }
+
+  private msUntilNextSpawnOpportunity(): number {
+    const spawnMs = (LEVELS[this.level - 1] ?? LEVELS[0]).spawnMs;
+    return Math.max(0, spawnMs - this.spawnElapsedMs);
+  }
+
+  private msUntilFreezeExpiry(): number {
+    const remainingMs = this.freezeExpiresAtActiveMs - this.activeMs;
+    return remainingMs > 0 ? remainingMs : Number.POSITIVE_INFINITY;
   }
 
   private moveTargets(deltaMs: number, freezeFactor: number): void {
@@ -331,17 +359,12 @@ export class GameModel implements GameModelTestApi {
   private completeTarget(target: Target): void {
     this.targets = this.targets.filter(({ id }) => id !== target.id);
     if (this.lockedTargetId === target.id) this.lockedTargetId = null;
-    if (target.kind !== 'normal') {
-      this.completedWords += 1;
-      this.events.push({ type: 'destroyed', target: cloneTarget(target) });
-      this.resolveSpecial(target);
-      return;
-    }
     this.score += scoreForCompletion(target.word.length, this.level, this.combo);
     this.combo += 1;
     this.maxCombo = Math.max(this.maxCombo, this.combo);
     this.completedWords += 1;
     this.events.push({ type: 'destroyed', target: cloneTarget(target) });
+    if (target.kind !== 'normal') this.resolveSpecial(target);
   }
 
   private resolveSpecial(target: Target): void {
