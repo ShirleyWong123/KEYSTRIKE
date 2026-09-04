@@ -1,11 +1,15 @@
-import { LEVELS, scoreForCompletion } from './config';
+import { LEVELS, levelForActiveMs, scoreForCompletion } from './config';
 import { findLockCandidate, TargetManager } from './target-manager';
-import type { Difficulty, GameEvent, GamePhase, GameSettings, GameSnapshot, Target } from './types';
+import type { SpawnRequest } from './target-manager';
+import type { Difficulty, GameEvent, GamePhase, GameSettings, GameSnapshot, Target, TargetKind } from './types';
 
 const COUNTDOWN_MS = 3_000;
 const INITIAL_SHIELD = 100;
 const BREACH_DAMAGE = 20;
 const LETTER_SCORE = 10;
+const SPECIAL_PROTECTION_MS = 12_000;
+const SPECIAL_COOLDOWN_MS = 14_000;
+const SPECIAL_CHANCE = 0.08;
 
 const tutorialWordFor = (difficulty: Difficulty): string => ({
   easy: 'NOVA',
@@ -39,11 +43,21 @@ export interface KeyInput {
 export interface GameModelTestApi {
   injectTarget(target: Target): void;
   advanceCountdown(deltaMs: number): void;
+  attemptSpawn(): void;
+}
+
+export interface GameModelOptions {
+  random?: () => number;
+  spawnTarget?: (request: SpawnRequest) => Target | null;
+  autoSpawn?: boolean;
 }
 
 /** Owns all authoritative, deterministic run state and emits immutable effect events. */
 export class GameModel implements GameModelTestApi {
   private readonly targetManager: TargetManager;
+  private readonly random: () => number;
+  private readonly spawnTarget: (request: SpawnRequest) => Target | null;
+  private readonly autoSpawn: boolean;
   private settings: GameSettings | null = null;
   private phase: GamePhase = 'menu';
   private score = 0;
@@ -58,12 +72,18 @@ export class GameModel implements GameModelTestApi {
   private missedWords = 0;
   private lockedTargetId: number | null = null;
   private freezeRemainingMs = 0;
+  private freezeExpiresAtActiveMs = 0;
   private countdownRemainingMs = 0;
+  private lastSpecialSpawnActiveMs: number | null = null;
+  private spawnElapsedMs = 0;
   private targets: Target[] = [];
   private events: GameEvent[] = [];
 
-  constructor(targetManager: TargetManager = new TargetManager()) {
+  constructor(targetManager: TargetManager = new TargetManager(), options: GameModelOptions = {}) {
     this.targetManager = targetManager;
+    this.random = options.random ?? Math.random;
+    this.spawnTarget = options.spawnTarget ?? ((request) => this.targetManager.trySpawn(request));
+    this.autoSpawn = options.autoSpawn ?? true;
   }
 
   start(settings: GameSettings): void {
@@ -167,6 +187,27 @@ export class GameModel implements GameModelTestApi {
     if (this.countdownRemainingMs === 0) this.phase = 'playing';
   }
 
+  /** Test/debug-only: attempts one ordinary target-generation opportunity. */
+  attemptSpawn(): void {
+    if (!this.settings) return;
+    const level = LEVELS[this.level - 1] ?? LEVELS[0];
+    if (this.targets.length >= level.maxTargets) return;
+
+    const eligibleSpecials = this.eligibleSpecialKinds();
+    const kind = this.canSpawnSpecial(eligibleSpecials) && this.nextRandom() < SPECIAL_CHANCE
+      ? eligibleSpecials[Math.floor(this.nextRandom() * eligibleSpecials.length)]!
+      : 'normal';
+    const spawned = this.spawnTarget({
+      difficulty: this.settings.difficulty,
+      level: this.level,
+      targets: this.targets,
+      kind,
+    });
+    if (!spawned) return;
+    this.targets.push(cloneTarget(spawned));
+    if (kind !== 'normal') this.lastSpecialSpawnActiveMs = this.activeMs;
+  }
+
   private resetRun(phase: GamePhase): void {
     this.phase = phase;
     this.score = 0;
@@ -181,7 +222,10 @@ export class GameModel implements GameModelTestApi {
     this.missedWords = 0;
     this.lockedTargetId = null;
     this.freezeRemainingMs = 0;
+    this.freezeExpiresAtActiveMs = 0;
     this.countdownRemainingMs = 0;
+    this.lastSpecialSpawnActiveMs = null;
+    this.spawnElapsedMs = 0;
     this.targets = [];
     this.events = [];
   }
@@ -220,10 +264,53 @@ export class GameModel implements GameModelTestApi {
   }
 
   private advancePlaying(deltaMs: number): void {
+    const frozenMs = Math.min(deltaMs, Math.max(0, this.freezeExpiresAtActiveMs - this.activeMs));
+    if (frozenMs > 0) this.moveTargets(frozenMs, 0.5);
+    if (deltaMs > frozenMs) this.moveTargets(deltaMs - frozenMs, 1);
     this.activeMs += deltaMs;
-    const movement = this.targetManager.update(this.targets, deltaMs, 1);
+    this.freezeRemainingMs = Math.max(0, this.freezeExpiresAtActiveMs - this.activeMs);
+    const nextLevel = levelForActiveMs(this.activeMs);
+    for (let crossedLevel = this.level + 1; crossedLevel <= nextLevel; crossedLevel += 1) {
+      this.events.push({ type: 'level-up', level: crossedLevel });
+    }
+    this.level = nextLevel;
+    this.spawnElapsedMs += deltaMs;
+    this.advanceSpawnSchedule();
+  }
+
+  private moveTargets(deltaMs: number, freezeFactor: number): void {
+    const movement = this.targetManager.update(this.targets, deltaMs, freezeFactor);
     this.targets = movement.active;
     for (const breached of movement.breached) this.applyBreach(breached);
+  }
+
+  private advanceSpawnSchedule(): void {
+    while (this.phase === 'playing') {
+      const spawnMs = (LEVELS[this.level - 1] ?? LEVELS[0]).spawnMs;
+      if (this.spawnElapsedMs < spawnMs) return;
+      this.spawnElapsedMs -= spawnMs;
+      if (this.autoSpawn) this.attemptSpawn();
+    }
+  }
+
+  private eligibleSpecialKinds(): Exclude<TargetKind, 'normal'>[] {
+    const eligible: Exclude<TargetKind, 'normal'>[] = [];
+    if (this.shield <= 60) eligible.push('repair');
+    if (this.targets.filter(({ kind }) => kind === 'normal').length >= 3) eligible.push('pulse');
+    if (this.level >= 3 && this.targets.length >= 2) eligible.push('freeze');
+    return eligible;
+  }
+
+  private canSpawnSpecial(eligibleSpecials: readonly Exclude<TargetKind, 'normal'>[]): boolean {
+    return this.activeMs >= SPECIAL_PROTECTION_MS
+      && eligibleSpecials.length > 0
+      && !this.targets.some(({ kind }) => kind !== 'normal')
+      && (this.lastSpecialSpawnActiveMs === null || this.activeMs - this.lastSpecialSpawnActiveMs >= SPECIAL_COOLDOWN_MS);
+  }
+
+  private nextRandom(): number {
+    const value = this.random();
+    return Number.isFinite(value) ? Math.min(1 - Number.EPSILON, Math.max(0, value)) : 0;
   }
 
   private findAndLock(letter: string): Target | null {
@@ -244,11 +331,45 @@ export class GameModel implements GameModelTestApi {
   private completeTarget(target: Target): void {
     this.targets = this.targets.filter(({ id }) => id !== target.id);
     if (this.lockedTargetId === target.id) this.lockedTargetId = null;
+    if (target.kind !== 'normal') {
+      this.completedWords += 1;
+      this.events.push({ type: 'destroyed', target: cloneTarget(target) });
+      this.resolveSpecial(target);
+      return;
+    }
     this.score += scoreForCompletion(target.word.length, this.level, this.combo);
     this.combo += 1;
     this.maxCombo = Math.max(this.maxCombo, this.combo);
     this.completedWords += 1;
     this.events.push({ type: 'destroyed', target: cloneTarget(target) });
+  }
+
+  private resolveSpecial(target: Target): void {
+    if (target.kind === 'repair') {
+      this.shield = Math.min(INITIAL_SHIELD, this.shield + BREACH_DAMAGE);
+      this.events.push({ type: 'special', kind: 'repair', affectedIds: [] });
+      return;
+    }
+    if (target.kind === 'pulse') {
+      const affectedTargets = this.targets
+        .filter(({ kind }) => kind === 'normal')
+        .sort((a, b) => b.y - a.y || a.id - b.id)
+        .slice(0, 4);
+      const affectedIds = affectedTargets.map(({ id }) => id);
+      this.targets = this.targets.filter((target) => !affectedIds.includes(target.id));
+      if (this.lockedTargetId !== null && affectedIds.includes(this.lockedTargetId)) this.lockedTargetId = null;
+      this.score += affectedTargets.reduce(
+        (total, affected) => total + Math.round(scoreForCompletion(affected.word.length, this.level, 0) * 0.2),
+        0,
+      );
+      this.events.push({ type: 'special', kind: 'pulse', affectedIds });
+      return;
+    }
+    if (target.kind === 'freeze') {
+      this.freezeExpiresAtActiveMs = this.activeMs + 5_000;
+      this.freezeRemainingMs = 5_000;
+      this.events.push({ type: 'special', kind: 'freeze', affectedIds: [] });
+    }
   }
 
   private applyBreach(target: Target): void {
