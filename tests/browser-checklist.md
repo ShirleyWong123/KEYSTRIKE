@@ -12,6 +12,15 @@ Automated integration coverage is recorded separately from browser acceptance. N
 | Safari (current desktop) | Not recorded | Not run | NOT RUN |
 | Firefox (current desktop) | Not recorded | Not run | NOT RUN |
 
+### Supplemental local-browser run
+
+On 2026-09-04, Codex In-app Browser (Chromium engine; exact version not exposed) was used against the debug URL. This is supporting evidence only and is not recorded as a Chrome, Safari, or Firefox pass.
+
+- PASS: production boot, visible keyboard-first menu, arrow-key difficulty selection, mission launch, countdown/tutorial transition, live targets, correct-word scoring/combo, wrong-letter red feedback/combo reset, `Esc` pause, modal focus wrapping, `Esc` resume focus restoration, and shield progress value synchronization.
+- PASS: non-overlapping HUD/battlefield layout at 1280×720 and 800×720. At 1280×720 the HUD occupied x=16–316 while Canvas occupied x=449.6–830.4; at 800×720 the HUD ended at y=105 and Canvas began at y=106.
+- NOT RUN: named-browser matrix, audible balance, forced debug specials/breaches/level 12, hidden-tab/blur behavior, persisted high-score results, three-minute FPS sampling, and effect-peak missed-key measurement.
+- Visual observation: the portrait battlefield, labels, ship, grid, HUD, red error edge, and menu remained readable in the tested sizes.
+
 Allowed result values are `PASS`, `FAIL`, or `NOT RUN`. Replace `NOT RUN` only after executing the complete row in that browser and add concise evidence or a defect reference.
 
 ## Setup
