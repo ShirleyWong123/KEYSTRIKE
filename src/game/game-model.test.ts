@@ -30,7 +30,7 @@ const combatModel = (difficulty: Difficulty = 'normal'): GameModel => {
   return model;
 };
 
-const specialSpawnModel = (randomValues: number[], autoSpawn = false): GameModel => {
+const specialSpawnModel = (randomValues: number[], autoSpawn = false, difficulty: Difficulty = 'normal'): GameModel => {
   let nextId = 1_000;
   const values = [...randomValues];
   const model = new GameModel(new TargetManager(() => 0), {
@@ -38,8 +38,10 @@ const specialSpawnModel = (randomValues: number[], autoSpawn = false): GameModel
     spawnTarget: ({ kind = 'normal' }) => target({ id: nextId++, word: kind, kind }),
     autoSpawn,
   });
-  model.start(settings());
+  model.start(settings(difficulty));
   model.beginCombat();
+  for (const letter of model.snapshot().targets[0]!.word) model.handleKey(letter);
+  model.drainEvents();
   return model;
 };
 
@@ -68,6 +70,45 @@ describe('GameModel lifecycle', () => {
     expect(model.snapshot()).toMatchObject({ phase: 'playing', activeMs: 0 });
   });
 
+  it('activates the tutorial target at y 72 when countdown completes', () => {
+    const model = new GameModel();
+    model.start(settings('easy'));
+
+    model.advanceCountdown(3_000);
+
+    expect(model.snapshot().targets[0]).toMatchObject({ tutorial: true, y: 72 });
+  });
+
+  it('gates ordinary spawn pacing until the tutorial is resolved', () => {
+    const model = new GameModel();
+    model.start(settings('easy'));
+    model.advanceCountdown(3_000);
+
+    model.update(20_000);
+    expect(model.snapshot().targets).toHaveLength(1);
+    for (const letter of 'nova') model.handleKey(letter);
+    model.update(2_800);
+
+    expect(model.snapshot().targets.some(({ tutorial }) => !tutorial)).toBe(true);
+  });
+
+  it('starts normal spawn cadence only after a breached tutorial resolves', () => {
+    const model = new GameModel(new TargetManager(() => 0), {
+      autoSpawn: true,
+      spawnTarget: ({ kind = 'normal' }) => target({ id: 2, word: 'spawned', kind, speed: 0 }),
+    });
+    model.start(settings());
+    model.beginCombat();
+    model.injectTarget(target({ id: 1, tutorial: true, y: 700, height: 20, speed: 40 }));
+
+    model.update(1_000);
+    expect(model.snapshot()).toMatchObject({ missedWords: 1, targets: [] });
+    model.update(2_799);
+    expect(model.snapshot().targets).toHaveLength(0);
+    model.update(1);
+    expect(model.snapshot().targets).toHaveLength(1);
+  });
+
   it('uses the target manager measurement for the complete tutorial label', () => {
     const measured = { width: 116, height: 42 };
     const manager = new TargetManager(() => 0.5, () => measured);
@@ -91,7 +132,7 @@ describe('GameModel lifecycle', () => {
     model.update(3_001);
 
     expect(model.snapshot()).toMatchObject({ phase: 'playing', activeMs: 1 });
-    expect(model.snapshot().targets[0]?.y).toBeCloseTo(-36 + 28 * 0.7 * 0.001, 8);
+    expect(model.snapshot().targets[0]?.y).toBeCloseTo(72 + 28 * 0.7 * 0.001, 8);
   });
 
   it('restarts the selected difficulty and returns to a cleared menu', () => {
@@ -151,6 +192,38 @@ describe('GameModel input and scoring', () => {
     expect(model.drainEvents()).toEqual([{ type: 'shot', targetId: 3, progress: 1 }]);
   });
 
+  it('uses Ace scoring for letters and completion rewards', () => {
+    const model = combatModel('hard');
+    model.injectTarget(target({ id: 31, word: 'a' }));
+
+    model.handleKey('a');
+
+    expect(model.snapshot().score).toBe(13 + scoreForCompletion(1, 1, 0, 'hard'));
+  });
+
+  it('shows a brief combo-break state only after a positive combo is broken', () => {
+    const model = combatModel();
+    model.injectTarget(target({ id: 32, word: 'a' }));
+    model.handleKey('a');
+    model.handleKey('x');
+
+    expect(model.snapshot()).toMatchObject({ wrongKeys: 1, comboBrokenRemainingMs: 180 });
+    model.update(180);
+    expect(model.snapshot().comboBrokenRemainingMs).toBe(0);
+  });
+
+  it('freezes combo-break snapshot feedback while paused', () => {
+    const model = combatModel();
+    model.injectTarget(target({ id: 33, word: 'a' }));
+    model.handleKey('a');
+    model.handleKey('x');
+    model.pause();
+
+    model.update(1_000);
+
+    expect(model.snapshot().comboBrokenRemainingMs).toBe(180);
+  });
+
   it('removes a completed target immediately and awards completion points before growing combo', () => {
     const model = combatModel();
     model.injectTarget(target({ id: 4, word: 'go' }));
@@ -159,7 +232,7 @@ describe('GameModel input and scoring', () => {
     model.handleKey('o');
 
     expect(model.snapshot()).toMatchObject({
-      score: 20 + scoreForCompletion(2, 1, 0),
+      score: 20 + scoreForCompletion(2, 1, 0, 'normal'),
       combo: 1,
       maxCombo: 1,
       completedWords: 1,
@@ -182,7 +255,7 @@ describe('GameModel input and scoring', () => {
     model.handleKey('b');
 
     expect(model.snapshot()).toMatchObject({
-      score: 20 + scoreForCompletion(1, 1, 0) + scoreForCompletion(1, 1, 1),
+      score: 20 + scoreForCompletion(1, 1, 0, 'normal') + scoreForCompletion(1, 1, 1, 'normal'),
       combo: 2,
       maxCombo: 2,
       completedWords: 2,
@@ -241,7 +314,7 @@ describe('GameModel input and scoring', () => {
     model.handleKey('p');
     expect(model.snapshot()).toMatchObject({
       phase: 'playing',
-      score: 10 + scoreForCompletion(1, 1, 0),
+      score: 10 + scoreForCompletion(1, 1, 0, 'normal'),
       completedWords: 1,
     });
   });
@@ -260,6 +333,15 @@ describe('GameModel breaches', () => {
     expect(model.snapshot()).toMatchObject({ shield: 80, combo: 0, missedWords: 1, lockedTargetId: null });
     expect(model.snapshot().targets.some(({ id }) => id === 11)).toBe(false);
     expect(model.drainEvents().some((event) => event.type === 'breach' && event.target.id === 11)).toBe(true);
+  });
+
+  it('counts breaches separately from wrong keys', () => {
+    const model = combatModel();
+    model.injectTarget(target({ id: 12, word: 'a', y: 700, height: 20, speed: 40 }));
+
+    model.update(1);
+
+    expect(model.snapshot()).toMatchObject({ missedWords: 1, wrongKeys: 0 });
   });
 
   it('ends the run when the shield reaches zero', () => {
@@ -316,6 +398,20 @@ describe('GameModel breaches', () => {
 });
 
 describe('GameModel progression', () => {
+  it('exposes the remaining active time to the next level', () => {
+    const model = new GameModel(new TargetManager(), { autoSpawn: false });
+    model.start(settings());
+    model.beginCombat();
+    for (const letter of model.snapshot().targets[0]!.word) model.handleKey(letter);
+    model.drainEvents();
+
+    expect(model.snapshot().nextLevelRemainingMs).toBe(45_000);
+    model.update(44_999);
+    expect(model.snapshot().nextLevelRemainingMs).toBe(1);
+    model.update(1);
+    expect(model.snapshot().nextLevelRemainingMs).toBe(45_000);
+  });
+
   it('derives level from active combat time rather than score and emits crossed level events', () => {
     const model = new GameModel(new TargetManager(), { autoSpawn: false });
     model.start(settings());
@@ -325,7 +421,7 @@ describe('GameModel progression', () => {
     model.handleKey('a');
     model.update(44_999);
 
-    expect(model.snapshot()).toMatchObject({ score: 10 + scoreForCompletion(1, 1, 0), level: 1, activeMs: 44_999 });
+    expect(model.snapshot()).toMatchObject({ score: 10 + scoreForCompletion(1, 1, 0, 'normal'), level: 1, activeMs: 44_999 });
     expect(model.drainEvents().filter((event) => event.type === 'level-up')).toEqual([]);
 
     model.update(45_001);
@@ -334,6 +430,19 @@ describe('GameModel progression', () => {
     expect(model.drainEvents().filter((event) => event.type === 'level-up')).toEqual([
       { type: 'level-up', level: 2 },
       { type: 'level-up', level: 3 },
+    ]);
+  });
+
+  it('emits sector milestones only at sectors three, six, nine, and twelve', () => {
+    const model = combatModel();
+
+    model.forceLevelForDebug(12);
+
+    expect(model.drainEvents().filter((event) => event.type === 'sector-milestone')).toEqual([
+      { type: 'sector-milestone', level: 3 },
+      { type: 'sector-milestone', level: 6 },
+      { type: 'sector-milestone', level: 9 },
+      { type: 'sector-milestone', level: 12 },
     ]);
   });
 
@@ -362,7 +471,7 @@ describe('GameModel repair specials', () => {
     model.handleKey('r');
 
     expect(model.snapshot()).toMatchObject({
-      score: 10 + scoreForCompletion(1, 1, 0),
+      score: 10 + scoreForCompletion(1, 1, 0, 'normal'),
       shield: 80,
       combo: 1,
       maxCombo: 1,
@@ -414,7 +523,7 @@ describe('GameModel freeze specials', () => {
 
     model.handleKey('f');
     expect(model.snapshot()).toMatchObject({
-      score: 10 + scoreForCompletion(1, 3, 0),
+      score: 10 + scoreForCompletion(1, 3, 0, 'normal'),
       combo: 1,
       maxCombo: 1,
       completedWords: 1,
@@ -438,15 +547,45 @@ describe('GameModel freeze specials', () => {
 });
 
 describe('GameModel special spawning', () => {
+  it('shows a special-kind hint once per run, including after expiry and cooldown, then resets it on restart', () => {
+    const model = specialSpawnModel([0.079, 0.67, 0.079, 0.67, 0.079, 0.67], false, 'hard');
+    model.forceLevelForDebug(2);
+    model.injectTarget(target({ id: 63, word: 'a', speed: 0 }));
+    model.injectTarget(target({ id: 64, word: 'b', speed: 0 }));
+    model.attemptSpawn();
+    expect(model.snapshot()).toMatchObject({ specialHint: 'freeze', specialHintRemainingMs: 1_600 });
+
+    model.pause();
+    model.update(1_600);
+    expect(model.snapshot()).toMatchObject({ specialHint: 'freeze', specialHintRemainingMs: 1_600 });
+    model.resume();
+    model.update(1_600);
+    expect(model.snapshot()).toMatchObject({ specialHint: null, specialHintRemainingMs: 0 });
+    for (const letter of 'freeze') model.handleKey(letter);
+    model.update(10_400);
+    model.attemptSpawn();
+    expect(model.snapshot().targets.filter(({ kind }) => kind === 'freeze')).toHaveLength(1);
+    expect(model.snapshot()).toMatchObject({ specialHint: null, specialHintRemainingMs: 0 });
+
+    model.restart();
+    model.beginCombat();
+    for (const letter of model.snapshot().targets[0]!.word) model.handleKey(letter);
+    model.drainEvents();
+    model.forceLevelForDebug(2);
+    model.injectTarget(target({ id: 67, word: 'a', speed: 0 }));
+    model.injectTarget(target({ id: 68, word: 'b', speed: 0 }));
+    model.attemptSpawn();
+    expect(model.snapshot()).toMatchObject({ specialHint: 'freeze', specialHintRemainingMs: 1_600 });
+  });
+
   it('creates normal spawn opportunities from active combat time', () => {
     const model = specialSpawnModel([], true);
 
     model.update(2_799);
-    expect(model.snapshot().targets).toHaveLength(1);
+    expect(model.snapshot().targets).toHaveLength(0);
     model.update(1);
 
     expect(model.snapshot().targets).toMatchObject([
-      { tutorial: true, kind: 'normal' },
       { word: 'normal', kind: 'normal' },
     ]);
   });
@@ -455,6 +594,7 @@ describe('GameModel special spawning', () => {
     const model = specialSpawnModel([0.079, 0, 0.079, 0]);
     model.attemptSpawn();
     expect(model.snapshot().targets.at(-1)?.kind).toBe('normal');
+    for (const letter of 'normal') model.handleKey(letter);
 
     model.update(12_000);
     model.injectTarget(target({ id: 70, word: 'a', y: 700, height: 20, speed: 40 }));
@@ -476,9 +616,46 @@ describe('GameModel special spawning', () => {
     model.attemptSpawn();
     expect(model.snapshot().targets.at(-1)?.kind).toBe('normal');
     for (const letter of 'normal') model.handleKey(letter);
+    model.injectTarget(target({ id: 75, word: 'a', y: 700, height: 20, speed: 40 }));
+    model.injectTarget(target({ id: 76, word: 'b', y: 700, height: 20, speed: 40 }));
     model.update(1);
     model.attemptSpawn();
     expect(model.snapshot().targets.at(-1)?.kind).toBe('repair');
+  });
+
+  it('allows hard specials after ten seconds and applies a twelve-second cooldown', () => {
+    const model = specialSpawnModel([0.079, 0, 0.079, 0], false, 'hard');
+    model.update(10_000);
+    model.injectTarget(target({ id: 73, word: 'a', y: 700, height: 20, speed: 40 }));
+    model.injectTarget(target({ id: 74, word: 'b', y: 700, height: 20, speed: 40 }));
+    model.update(1_000);
+
+    model.attemptSpawn();
+    expect(model.snapshot().targets.at(-1)?.kind).toBe('repair');
+    for (const letter of 'repair') model.handleKey(letter);
+    model.update(11_999);
+    model.attemptSpawn();
+    expect(model.snapshot().targets.at(-1)?.kind).toBe('normal');
+    for (const letter of 'normal') model.handleKey(letter);
+    model.injectTarget(target({ id: 77, word: 'a', y: 700, height: 20, speed: 40 }));
+    model.injectTarget(target({ id: 78, word: 'b', y: 700, height: 20, speed: 40 }));
+    model.update(1);
+    model.attemptSpawn();
+    expect(model.snapshot().targets.at(-1)?.kind).toBe('repair');
+  });
+
+  it('makes freeze eligible at hard level two but not normal level two', () => {
+    const eligibleAtLevelTwo = (difficulty: Difficulty) => {
+      const model = specialSpawnModel([0.079, 0.67], false, difficulty);
+      model.forceLevelForDebug(2);
+      model.injectTarget(target({ id: 75, word: 'a', speed: 0 }));
+      model.injectTarget(target({ id: 76, word: 'b', speed: 0 }));
+      model.attemptSpawn();
+      return model.snapshot().targets.find(({ kind }) => kind !== 'normal')?.kind;
+    };
+
+    expect(eligibleAtLevelTwo('hard')).toBe('freeze');
+    expect(eligibleAtLevelTwo('normal')).toBeUndefined();
   });
 
   it('falls back to normal when repair, pulse, and freeze are ineligible', () => {
@@ -577,6 +754,8 @@ describe('GameModel chronological progression', () => {
       });
       model.start(settings());
       model.beginCombat();
+      for (const letter of model.snapshot().targets[0]!.word) model.handleKey(letter);
+      model.drainEvents();
       for (const chunk of chunks) model.update(chunk);
       return { model, levels };
     };
@@ -606,24 +785,25 @@ describe('GameModel chronological progression', () => {
 });
 
 describe('GameModel label geometry over time', () => {
-  it('keeps the NOVA and quiet labels twelve pixels apart at exact 60Hz steps', () => {
+  it('keeps ordinary labels twelve pixels apart at exact 60Hz steps', () => {
     const measured = (word: string) => ({ width: Math.max(74, word.length * 10 + 36), height: 42 });
     const manager = new TargetManager(() => 0.34, measured);
     const model = new GameModel(manager, { random: () => 0.34 });
     model.start(settings('easy'));
     model.beginCombat();
+    for (const letter of 'nova') model.handleKey(letter);
+    model.drainEvents();
     let observedPair = false;
 
     for (let frame = 1; frame <= 600; frame += 1) {
       model.update(1_000 / 60);
-      const nova = model.snapshot().targets.find(({ word }) => word === 'NOVA');
-      const quiet = model.snapshot().targets.find(({ word }) => word === 'quiet');
-      if (!nova || !quiet) continue;
+      const [first, second] = model.snapshot().targets;
+      if (!first || !second) continue;
       observedPair = true;
-      const horizontallySeparated = nova.x + nova.width + 12 <= quiet.x
-        || quiet.x + quiet.width + 12 <= nova.x;
-      const front = nova.y >= quiet.y ? nova : quiet;
-      const trailing = front === nova ? quiet : nova;
+      const horizontallySeparated = first.x + first.width + 12 <= second.x
+        || second.x + second.width + 12 <= first.x;
+      const front = first.y >= second.y ? first : second;
+      const trailing = front === first ? second : first;
       const verticalGap = front.y - (trailing.y + trailing.height);
       expect(horizontallySeparated || verticalGap >= 12, `frame ${frame} gap ${verticalGap}`).toBe(true);
     }
@@ -631,7 +811,7 @@ describe('GameModel label geometry over time', () => {
     expect(observedPair).toBe(true);
   });
 
-  it('preserves measured margins and gaps when random 0.34 spawns quiet behind tutorial NOVA', () => {
+  it('preserves measured margins and gaps when random 0.34 spawns quiet after tutorial NOVA', () => {
     const measured = (word: string) => ({ width: Math.max(74, word.length * 10 + 36), height: 42 });
     const manager = new TargetManager(() => 0.34, measured);
     const model = new GameModel(manager, { random: () => 0.34 });
@@ -639,8 +819,11 @@ describe('GameModel label geometry over time', () => {
     model.beginCombat();
     model.update(2_800);
 
-    expect(model.snapshot().targets.map(({ word }) => word)).toEqual(['NOVA', 'quiet']);
-    expect(model.snapshot().targets[0]).toMatchObject(measured('NOVA'));
+    expect(model.snapshot().targets.map(({ word }) => word)).toEqual(['NOVA']);
+    for (const letter of 'nova') model.handleKey(letter);
+    model.update(2_800);
+    expect(model.snapshot().targets.map(({ word }) => word)).toEqual(['quiet']);
+    expect(model.snapshot().targets[0]).toMatchObject(measured('quiet'));
 
     const assertGeometry = (targets: readonly Target[]): void => {
       for (const current of targets) {
@@ -825,6 +1008,8 @@ describe('GameModel spawn state boundaries', () => {
     });
     model.start(settings());
     model.beginCombat();
+    for (const letter of model.snapshot().targets[0]!.word) model.handleKey(letter);
+    model.drainEvents();
     model.update(12_000);
     model.injectTarget(target({ id: 3_210, word: 'a', y: 700, height: 20, speed: 40 }));
     model.injectTarget(target({ id: 3_211, word: 'b', y: 700, height: 20, speed: 40 }));
@@ -849,6 +1034,8 @@ describe('GameModel spawn state boundaries', () => {
     });
     model.start(settings());
     model.beginCombat();
+    for (const letter of model.snapshot().targets[0]!.word) model.handleKey(letter);
+    model.drainEvents();
     model.injectTarget(target({ id: 3_340, word: 'a', y: 700, height: 20, speed: 40 }));
     model.injectTarget(target({ id: 3_341, word: 'b', y: 700, height: 20, speed: 40 }));
     model.update(90_000);
@@ -861,6 +1048,8 @@ describe('GameModel spawn state boundaries', () => {
     model.restart();
     model.beginCombat();
     expect(model.snapshot()).toMatchObject({ activeMs: 0, freezeRemainingMs: 0, targets: [{ tutorial: true }] });
+    for (const letter of model.snapshot().targets[0]!.word) model.handleKey(letter);
+    model.drainEvents();
     model.update(12_000);
     model.injectTarget(target({ id: 3_360, word: 'a', y: 700, height: 20, speed: 40 }));
     model.injectTarget(target({ id: 3_361, word: 'b', y: 700, height: 20, speed: 40 }));
@@ -878,9 +1067,13 @@ describe('GameModel spawn state boundaries', () => {
     });
     scheduleModel.start(settings());
     scheduleModel.beginCombat();
+    for (const letter of scheduleModel.snapshot().targets[0]!.word) scheduleModel.handleKey(letter);
+    scheduleModel.drainEvents();
     scheduleModel.update(2_799);
     scheduleModel.restart();
     scheduleModel.beginCombat();
+    for (const letter of scheduleModel.snapshot().targets[0]!.word) scheduleModel.handleKey(letter);
+    scheduleModel.drainEvents();
     scheduleModel.update(2_799);
     expect(scheduledSpawns).toBe(0);
     scheduleModel.update(1);

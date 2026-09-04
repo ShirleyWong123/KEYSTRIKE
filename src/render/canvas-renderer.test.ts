@@ -114,6 +114,10 @@ const snapshot = (overrides: Partial<GameSnapshot> = {}): GameSnapshot => ({
   missedWords: 0,
   lockedTargetId: null,
   freezeRemainingMs: 0,
+  nextLevelRemainingMs: 45_000,
+  comboBrokenRemainingMs: 0,
+  specialHint: null,
+  specialHintRemainingMs: 0,
   targets: [],
   ...overrides,
 });
@@ -304,6 +308,78 @@ describe('CanvasRenderer', () => {
     expect(context.calls.filter(({ op, fillStyle }) => op === 'fill' && fillStyle === '#78efff').length).toBeGreaterThan(0);
   });
 
+  it('caps concurrent destroyed-event ambient feedback at one low-flash overlay', () => {
+    const { context, renderer } = harness();
+
+    renderer.consume(Array.from({ length: 3 }, () => ({ type: 'destroyed' as const, target: target() })));
+    renderer.render(snapshot(), 0);
+
+    const flashes = context.calls.filter(({ op, fillStyle }) => op === 'fillRect' && fillStyle === '#ffffff');
+    expect(flashes).toHaveLength(1);
+    expect(flashes[0]?.globalAlpha).toBeLessThanOrEqual(0.18);
+  });
+
+  it('does not refresh an active ambient flash when another destruction retains its local explosion', () => {
+    const { context, renderer, setNow } = harness();
+    renderer.render(snapshot(), 0);
+    renderer.consume([{ type: 'destroyed', target: target({ id: 1 }) }]);
+    renderer.render(snapshot(), 0);
+    context.calls.length = 0;
+
+    setNow(1_050);
+    renderer.consume([{ type: 'destroyed', target: target({ id: 2, x: 260 }) }]);
+    renderer.render(snapshot(), 0);
+
+    const flashes = context.calls.filter(({ op, fillStyle }) => op === 'fillRect' && fillStyle === '#ffffff');
+    expect(flashes).toHaveLength(1);
+    expect(flashes[0]?.globalAlpha).toBeCloseTo(0.18 * (1 - 50 / 120));
+    expect(context.calls.filter(({ op, strokeStyle }) => op === 'stroke' && strokeStyle === '#fff3d6')).toHaveLength(2);
+  });
+
+  it('draws threat feedback only for normal targets in the 180px band with stable ties and before labels', () => {
+    const { context, renderer } = harness();
+    const boundary = snapshot({ targets: [target({ id: 1, y: 504 })] });
+    renderer.render(boundary, 0);
+    expect(context.calls.some(({ op, strokeStyle }) => op === 'strokeRect' && strokeStyle === '#ff385c')).toBe(true);
+
+    context.calls.length = 0;
+    renderer.render(snapshot({ targets: [target({ id: 1, y: 503 })] }), 0);
+    expect(context.calls.some(({ op, strokeStyle }) => op === 'strokeRect' && strokeStyle === '#ff385c')).toBe(false);
+
+    context.calls.length = 0;
+    const state = snapshot({ targets: [
+      target({ id: 8, word: 'TALL', y: 600, height: 100 }),
+      target({ id: 99, word: 'heal', kind: 'repair', y: 683 }),
+      target({ id: 7, word: 'TIE', y: 600 }),
+      target({ id: 6, word: 'OUT', y: 503 }),
+    ] });
+    const before = structuredClone(state);
+
+    renderer.render(state, 0);
+
+    const warning = context.calls.find(({ op, strokeStyle }) => op === 'strokeRect' && strokeStyle === '#ff385c');
+    expect(warning?.globalAlpha).toBeCloseTo(0.08 + ((636 - (720 - 180)) / 180) * (0.07 + 0.5 * 0.09));
+    expect(state.targets.map(({ id }) => id)).toEqual(before.targets.map(({ id }) => id));
+    const warningIndex = context.calls.findIndex(({ op, strokeStyle }) => op === 'strokeRect' && strokeStyle === '#ff385c');
+    const firstLabelIndex = context.calls.findIndex(({ op }) => op === 'fillText');
+    expect(warningIndex).toBeLessThan(firstLabelIndex);
+  });
+
+  it('does not mutate threat state while drawing a locked target', () => {
+    const { context, renderer } = harness();
+    const state = snapshot({
+      lockedTargetId: 2,
+      targets: [target({ id: 2, y: 640 }), target({ id: 1, y: 500 })],
+    });
+    const before = structuredClone(state);
+
+    renderer.render(state, 0);
+
+    expect(context.calls.some(({ op, strokeStyle }) => op === 'strokeRect' && strokeStyle === '#ff385c')).toBe(true);
+    expect(state.lockedTargetId).toBe(before.lockedTargetId);
+    expect(state.targets.map(({ id }) => id)).toEqual(before.targets.map(({ id }) => id));
+  });
+
   it('shows special labels and brief level-up and breach defense feedback without changing state', () => {
     const { context, renderer } = harness();
     const state = snapshot({ targets: [
@@ -319,7 +395,9 @@ describe('CanvasRenderer', () => {
     ]);
     renderer.render(state, 0);
 
-    expect(textCalls(context).map(({ args }) => args[0])).toEqual(expect.arrayContaining(['REPAIR', 'PULSE', 'FREEZE', 'LEVEL 2']));
+    expect(textCalls(context).map(({ args }) => args[0])).toEqual(expect.arrayContaining([
+      'REPAIR', 'PULSE', 'FREEZE', 'LEVEL 2 // SPEED UP',
+    ]));
     expect(context.calls.some(({ op, strokeStyle }) => op === 'strokeRect' && strokeStyle === '#ff385c')).toBe(true);
     expect(state).toEqual(before);
   });
@@ -359,6 +437,43 @@ describe('CanvasRenderer', () => {
     expect([secondBorder?.lineWidth, secondBorder?.globalAlpha]).toEqual([firstBorder?.lineWidth, firstBorder?.globalAlpha]);
   });
 
+  it('shows independent level and sector messages only for their presentation lifetimes', () => {
+    const { context, renderer, setNow } = harness();
+    renderer.consume([{ type: 'level-up', level: 2 }, { type: 'sector-milestone', level: 3 }]);
+    renderer.render(snapshot(), 0);
+
+    expect(textCalls(context).map(({ args }) => args[0])).toEqual(expect.arrayContaining([
+      'LEVEL 2 // SPEED UP', 'SECTOR 1 STABILIZED',
+    ]));
+
+    context.calls.length = 0;
+    setNow(1_901);
+    renderer.render(snapshot(), 0);
+    expect(textCalls(context).map(({ args }) => args[0])).not.toContain('LEVEL 2 // SPEED UP');
+    expect(textCalls(context).map(({ args }) => args[0])).toContain('SECTOR 1 STABILIZED');
+
+    context.calls.length = 0;
+    setNow(2_201);
+    renderer.render(snapshot(), 0);
+    expect(textCalls(context).map(({ args }) => args[0])).not.toContain('SECTOR 1 STABILIZED');
+  });
+
+  it('keeps the error border through 149ms but removes it after 150ms', () => {
+    const { context, renderer, setNow } = harness();
+    renderer.consume([{ type: 'error' }]);
+    renderer.render(snapshot(), 0);
+
+    context.calls.length = 0;
+    setNow(1_149);
+    renderer.render(snapshot(), 0);
+    expect(context.calls.some(({ op, strokeStyle }) => op === 'strokeRect' && strokeStyle === '#ff385c')).toBe(true);
+
+    context.calls.length = 0;
+    setNow(1_151);
+    renderer.render(snapshot(), 0);
+    expect(context.calls.some(({ op, strokeStyle }) => op === 'strokeRect' && strokeStyle === '#ff385c')).toBe(false);
+  });
+
   it('keeps active effects at the same age while paused, then resumes their remaining lifetime', () => {
     const { context, renderer, setNow } = harness();
     renderer.consume([
@@ -371,7 +486,7 @@ describe('CanvasRenderer', () => {
     const playing = snapshot({ targets: [target()] });
     renderer.render(playing, 0);
     const initialProjectile = context.calls.find(({ op, fillStyle }) => op === 'arc' && fillStyle === '#ffbd66');
-    const initialLevel = context.calls.find(({ op, args }) => op === 'fillText' && args[0] === 'LEVEL 2');
+    const initialLevel = context.calls.find(({ op, args }) => op === 'fillText' && args[0] === 'LEVEL 2 // SPEED UP');
     const initialExplosion = context.calls.find(({ op, strokeStyle }) => op === 'arc' && strokeStyle === '#fff3d6');
     const initialBreach = context.calls.find(({ op, strokeStyle }) => op === 'arc' && strokeStyle === '#ff385c');
     const initialShake = context.calls.find(({ op }) => op === 'translate');
@@ -380,7 +495,7 @@ describe('CanvasRenderer', () => {
     setNow(11_000);
     renderer.render(snapshot({ ...playing, phase: 'paused' }), 0);
     const pausedProjectile = context.calls.find(({ op, fillStyle }) => op === 'arc' && fillStyle === '#ffbd66');
-    const pausedLevel = context.calls.find(({ op, args }) => op === 'fillText' && args[0] === 'LEVEL 2');
+    const pausedLevel = context.calls.find(({ op, args }) => op === 'fillText' && args[0] === 'LEVEL 2 // SPEED UP');
     const pausedExplosion = context.calls.find(({ op, strokeStyle }) => op === 'arc' && strokeStyle === '#fff3d6');
     const pausedBreach = context.calls.find(({ op, strokeStyle }) => op === 'arc' && strokeStyle === '#ff385c');
     const pausedShake = context.calls.find(({ op }) => op === 'translate');
@@ -397,7 +512,7 @@ describe('CanvasRenderer', () => {
     const resumedProjectile = context.calls.find(({ op, fillStyle }) => op === 'arc' && fillStyle === '#ffbd66');
     expect(resumedProjectile).toBeDefined();
     expect(resumedProjectile?.args).not.toEqual(initialProjectile?.args);
-    expect(context.calls.some(({ op, args }) => op === 'fillText' && args[0] === 'LEVEL 2')).toBe(true);
+    expect(context.calls.some(({ op, args }) => op === 'fillText' && args[0] === 'LEVEL 2 // SPEED UP')).toBe(true);
     expect(context.calls.some(({ op, strokeStyle }) => op === 'arc' && strokeStyle === '#fff3d6')).toBe(true);
     expect(context.calls.some(({ op, strokeStyle }) => op === 'arc' && strokeStyle === '#ff385c')).toBe(true);
 
@@ -453,7 +568,7 @@ describe('CanvasRenderer', () => {
     const recoveredBorder = context.calls.find(({ op, strokeStyle }) => op === 'strokeRect' && strokeStyle === '#ff385c');
 
     expect(regressedBorder?.globalAlpha).toBe(advancedBorder?.globalAlpha);
-    expect(recoveredBorder?.globalAlpha).toBeCloseTo(0.25 + (1 - 100 / 120) * 0.55);
+    expect(recoveredBorder?.globalAlpha).toBeCloseTo(0.25 + (1 - 100 / 150) * 0.55);
   });
 
   it('uses half-speed target interpolation while freeze remains active', () => {

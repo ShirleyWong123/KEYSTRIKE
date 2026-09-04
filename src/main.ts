@@ -26,7 +26,7 @@ export interface RuntimeParts {
   model: GameModel;
   renderer: Pick<CanvasRenderer, 'consume' | 'render' | 'resize' | 'resetPresentation'>;
   audio: Pick<AudioEngine, 'consume' | 'dispose' | 'pausePresentation' | 'resumeFromGesture' | 'resetPresentation'>;
-  shell: Pick<AppShell, 'update'>;
+  shell: Pick<AppShell, 'consume' | 'update'>;
 }
 
 export interface KeystrikeDebugApi {
@@ -73,6 +73,7 @@ export const createKeystrikeRuntime = (
     const events = freezeEvents(drained);
     renderer.consume(events);
     audio.consume(events);
+    shell.consume(events);
   };
 
   const synchronizePhase = (phase: GameSnapshot['phase'], fromUserGesture = false): void => {

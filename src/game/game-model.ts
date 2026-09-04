@@ -1,4 +1,12 @@
-import { LEVELS, levelForActiveMs, scoreForCompletion } from './config';
+import {
+  LEVELS,
+  difficultyTuning,
+  levelForActiveMs,
+  msUntilNextLevel,
+  scoreForCompletion,
+  scoreForLetter,
+  spawnIntervalFor,
+} from './config';
 import { DEFENSE_LINE, findLockCandidate, TargetManager } from './target-manager';
 import type { SpawnRequest } from './target-manager';
 import type { Difficulty, GameEvent, GamePhase, GameSettings, GameSnapshot, Target, TargetKind } from './types';
@@ -6,9 +14,6 @@ import type { Difficulty, GameEvent, GamePhase, GameSettings, GameSnapshot, Targ
 const COUNTDOWN_MS = 3_000;
 const INITIAL_SHIELD = 100;
 const BREACH_DAMAGE = 20;
-const LETTER_SCORE = 10;
-const SPECIAL_PROTECTION_MS = 12_000;
-const SPECIAL_COOLDOWN_MS = 14_000;
 const SPECIAL_CHANCE = 0.08;
 
 const tutorialWordFor = (difficulty: Difficulty): string => ({
@@ -73,6 +78,10 @@ export class GameModel implements GameModelTestApi {
   private missedWords = 0;
   private lockedTargetId: number | null = null;
   private freezeRemainingMs = 0;
+  private comboBrokenRemainingMs = 0;
+  private specialHint: Exclude<TargetKind, 'normal'> | null = null;
+  private specialHintRemainingMs = 0;
+  private shownSpecialHints = new Set<Exclude<TargetKind, 'normal'>>();
   private freezeExpiresAtActiveMs = 0;
   private countdownRemainingMs = 0;
   private lastSpecialSpawnActiveMs: number | null = null;
@@ -98,6 +107,7 @@ export class GameModel implements GameModelTestApi {
     if (this.phase !== 'countdown') return;
     this.countdownRemainingMs = 0;
     this.phase = 'playing';
+    this.activateTutorialTarget();
   }
 
   handleKey(input: string | KeyInput): void {
@@ -169,6 +179,10 @@ export class GameModel implements GameModelTestApi {
       missedWords: this.missedWords,
       lockedTargetId: this.lockedTargetId,
       freezeRemainingMs: this.freezeRemainingMs,
+      nextLevelRemainingMs: msUntilNextLevel(this.activeMs),
+      comboBrokenRemainingMs: this.comboBrokenRemainingMs,
+      specialHint: this.specialHint,
+      specialHintRemainingMs: this.specialHintRemainingMs,
       targets: this.targets.map(cloneTarget),
     };
   }
@@ -185,12 +199,16 @@ export class GameModel implements GameModelTestApi {
   advanceCountdown(deltaMs: number): void {
     if (this.phase !== 'countdown' || !isValidDelta(deltaMs)) return;
     this.countdownRemainingMs = Math.max(0, this.countdownRemainingMs - deltaMs);
-    if (this.countdownRemainingMs === 0) this.phase = 'playing';
+    if (this.countdownRemainingMs === 0) {
+      this.phase = 'playing';
+      this.activateTutorialTarget();
+    }
   }
 
   /** Test/debug-only: attempts one ordinary target-generation opportunity. */
   attemptSpawn(): void {
     if (this.phase !== 'playing' || !this.settings) return;
+    if (this.targets.some(({ tutorial }) => tutorial)) return;
     const level = LEVELS[this.level - 1] ?? LEVELS[0];
     if (this.targets.length >= level.maxTargets) return;
 
@@ -206,7 +224,14 @@ export class GameModel implements GameModelTestApi {
     });
     if (!spawned) return;
     this.targets.push(cloneTarget(spawned));
-    if (kind !== 'normal') this.lastSpecialSpawnActiveMs = this.activeMs;
+    if (kind !== 'normal') {
+      this.lastSpecialSpawnActiveMs = this.activeMs;
+      if (!this.shownSpecialHints.has(kind)) {
+        this.shownSpecialHints.add(kind);
+        this.specialHint = kind;
+        this.specialHintRemainingMs = 1_600;
+      }
+    }
   }
 
   /** Test/debug-only: advances progression without simulating movement or spawn opportunities. */
@@ -215,7 +240,7 @@ export class GameModel implements GameModelTestApi {
     const targetLevel = Math.min(LEVELS.length, Math.max(this.level, Math.floor(requestedLevel)));
     if (targetLevel === this.level) return;
     for (let crossedLevel = this.level + 1; crossedLevel <= targetLevel; crossedLevel += 1) {
-      this.events.push({ type: 'level-up', level: crossedLevel });
+      this.emitLevelEvents(crossedLevel);
     }
     this.level = targetLevel;
     this.activeMs = Math.max(this.activeMs, (targetLevel - 1) * 45_000);
@@ -236,6 +261,10 @@ export class GameModel implements GameModelTestApi {
     this.missedWords = 0;
     this.lockedTargetId = null;
     this.freezeRemainingMs = 0;
+    this.comboBrokenRemainingMs = 0;
+    this.specialHint = null;
+    this.specialHintRemainingMs = 0;
+    this.shownSpecialHints = new Set();
     this.freezeExpiresAtActiveMs = 0;
     this.countdownRemainingMs = 0;
     this.lastSpecialSpawnActiveMs = null;
@@ -261,13 +290,14 @@ export class GameModel implements GameModelTestApi {
 
     locked.typed += 1;
     this.correctKeys += 1;
-    this.score += LETTER_SCORE;
+    this.score += Math.round(scoreForLetter(this.settings!.difficulty));
     this.events.push({ type: 'shot', targetId: locked.id, progress: locked.typed });
     if (locked.typed === locked.word.length) this.completeTarget(locked);
   }
 
   private advancePlaying(deltaMs: number): void {
     let remainingMs = deltaMs;
+    let deferSpawnCadenceUntilNextUpdate = false;
     while (remainingMs > 0 && this.phase === 'playing') {
       this.processProgressionBoundaries();
       const freezeFactor = this.freezeExpiresAtActiveMs > this.activeMs ? 0.5 : 1;
@@ -279,13 +309,24 @@ export class GameModel implements GameModelTestApi {
         this.msUntilNextBreach(freezeFactor),
       );
       if (segmentMs === 0) {
+        const tutorialActiveBeforeMove = this.targets.some(({ tutorial }) => tutorial);
         this.moveTargets(0, freezeFactor);
+        if (tutorialActiveBeforeMove && !this.targets.some(({ tutorial }) => tutorial)) {
+          deferSpawnCadenceUntilNextUpdate = true;
+        }
         continue;
       }
+      const tutorialActiveBeforeMove = this.targets.some(({ tutorial }) => tutorial);
       this.moveTargets(segmentMs, freezeFactor);
       this.activeMs += segmentMs;
-      this.spawnElapsedMs += segmentMs;
+      if (deferSpawnCadenceUntilNextUpdate || (tutorialActiveBeforeMove && !this.targets.some(({ tutorial }) => tutorial))) {
+        this.spawnElapsedMs = 0;
+      }
+      else this.spawnElapsedMs += segmentMs;
       this.freezeRemainingMs = Math.max(0, this.freezeExpiresAtActiveMs - this.activeMs);
+      this.comboBrokenRemainingMs = Math.max(0, this.comboBrokenRemainingMs - segmentMs);
+      this.specialHintRemainingMs = Math.max(0, this.specialHintRemainingMs - segmentMs);
+      if (this.specialHintRemainingMs === 0) this.specialHint = null;
       this.reconcileLevel();
       remainingMs -= segmentMs;
     }
@@ -300,7 +341,7 @@ export class GameModel implements GameModelTestApi {
   private reconcileLevel(): void {
     const nextLevel = levelForActiveMs(this.activeMs);
     for (let crossedLevel = this.level + 1; crossedLevel <= nextLevel; crossedLevel += 1) {
-      this.events.push({ type: 'level-up', level: crossedLevel });
+      this.emitLevelEvents(crossedLevel);
     }
     this.level = nextLevel;
     this.freezeRemainingMs = Math.max(0, this.freezeExpiresAtActiveMs - this.activeMs);
@@ -311,7 +352,8 @@ export class GameModel implements GameModelTestApi {
   }
 
   private msUntilNextSpawnOpportunity(): number {
-    const spawnMs = (LEVELS[this.level - 1] ?? LEVELS[0]).spawnMs;
+    if (this.targets.some(({ tutorial }) => tutorial)) return Number.POSITIVE_INFINITY;
+    const spawnMs = spawnIntervalFor(this.settings!.difficulty, this.level);
     return Math.max(0, spawnMs - this.spawnElapsedMs);
   }
 
@@ -340,8 +382,9 @@ export class GameModel implements GameModelTestApi {
   }
 
   private advanceSpawnSchedule(): void {
+    if (this.targets.some(({ tutorial }) => tutorial)) return;
     while (this.phase === 'playing') {
-      const spawnMs = (LEVELS[this.level - 1] ?? LEVELS[0]).spawnMs;
+      const spawnMs = spawnIntervalFor(this.settings!.difficulty, this.level);
       if (this.spawnElapsedMs < spawnMs) return;
       this.spawnElapsedMs -= spawnMs;
       if (this.autoSpawn) this.attemptSpawn();
@@ -352,15 +395,16 @@ export class GameModel implements GameModelTestApi {
     const eligible: Exclude<TargetKind, 'normal'>[] = [];
     if (this.shield <= 60) eligible.push('repair');
     if (this.targets.filter(({ kind }) => kind === 'normal').length >= 3) eligible.push('pulse');
-    if (this.level >= 3 && this.targets.length >= 2) eligible.push('freeze');
+    if (this.level >= difficultyTuning(this.settings!.difficulty).freezeMinimumLevel && this.targets.length >= 2) eligible.push('freeze');
     return eligible;
   }
 
   private canSpawnSpecial(eligibleSpecials: readonly Exclude<TargetKind, 'normal'>[]): boolean {
-    return this.activeMs >= SPECIAL_PROTECTION_MS
+    const tuning = difficultyTuning(this.settings!.difficulty);
+    return this.activeMs >= tuning.specialProtectionMs
       && eligibleSpecials.length > 0
       && !this.targets.some(({ kind }) => kind !== 'normal')
-      && (this.lastSpecialSpawnActiveMs === null || this.activeMs - this.lastSpecialSpawnActiveMs >= SPECIAL_COOLDOWN_MS);
+      && (this.lastSpecialSpawnActiveMs === null || this.activeMs - this.lastSpecialSpawnActiveMs >= tuning.specialCooldownMs);
   }
 
   private nextRandom(): number {
@@ -378,6 +422,7 @@ export class GameModel implements GameModelTestApi {
   }
 
   private registerWrongLetter(): void {
+    if (this.combo > 0) this.comboBrokenRemainingMs = 180;
     this.combo = 0;
     this.wrongKeys += 1;
     this.events.push({ type: 'error' });
@@ -386,11 +431,12 @@ export class GameModel implements GameModelTestApi {
   private completeTarget(target: Target): void {
     this.targets = this.targets.filter(({ id }) => id !== target.id);
     if (this.lockedTargetId === target.id) this.lockedTargetId = null;
-    this.score += scoreForCompletion(target.word.length, this.level, this.combo);
+    this.score += scoreForCompletion(target.word.length, this.level, this.combo, this.settings!.difficulty);
     this.combo += 1;
     this.maxCombo = Math.max(this.maxCombo, this.combo);
     this.completedWords += 1;
     this.events.push({ type: 'destroyed', target: cloneTarget(target) });
+    if (target.tutorial) this.spawnElapsedMs = 0;
     if (target.kind !== 'normal') this.resolveSpecial(target);
   }
 
@@ -409,7 +455,7 @@ export class GameModel implements GameModelTestApi {
       this.targets = this.targets.filter((target) => !affectedIds.includes(target.id));
       if (this.lockedTargetId !== null && affectedIds.includes(this.lockedTargetId)) this.lockedTargetId = null;
       this.score += affectedTargets.reduce(
-        (total, affected) => total + Math.round(scoreForCompletion(affected.word.length, this.level, 0) * 0.2),
+        (total, affected) => total + Math.round(scoreForCompletion(affected.word.length, this.level, 0, this.settings!.difficulty) * 0.2),
         0,
       );
       this.events.push({ type: 'special', kind: 'pulse', affectedIds });
@@ -428,6 +474,18 @@ export class GameModel implements GameModelTestApi {
     this.combo = 0;
     this.missedWords += 1;
     this.events.push({ type: 'breach', target: cloneTarget(target) });
+    if (target.tutorial) this.spawnElapsedMs = 0;
     if (this.shield === 0) this.phase = 'gameover';
+  }
+
+  private activateTutorialTarget(): void {
+    this.targets = this.targets.map((target) => target.tutorial ? { ...target, y: 72 } : target);
+  }
+
+  private emitLevelEvents(level: number): void {
+    this.events.push({ type: 'level-up', level });
+    if (level === 3 || level === 6 || level === 9 || level === 12) {
+      this.events.push({ type: 'sector-milestone', level });
+    }
   }
 }
