@@ -312,5 +312,5 @@ KEYSTRIKE 是一款面向桌面浏览器的原创竖屏科幻打字射击游戏�
 - Ace — **PASS（已观察范围）**：完成 `VECTOR` 后 HUD 得分为 266，符合逐字分与完成分的 1.25 倍计分；连续完成达到 Combo 5，并在护盾 100%、无越线的受控真人输入序列中自然到达 Level 2。证据：`28-task5-ace-tutorial.png`、`29-task5-ace-lock.png`、`30-task5-ace-combo5.png`、`33-task5-ace-level2-no-breach.png`。
 - 普通动态效果 — **PASS**：连续销毁期间仍可读取剩余 `discover` 标签，未观察到全屏闪光洗白文字。证据：`32-task5-normal-motion-flash.png`。
 - 减弱动态效果 — **PASS**：连续销毁期间剩余 `time` 标签可读，闪光和碎片观感明显较普通模式克制；近防线红色边缘提示未遮挡 `time`，已输入首字母与锁定框仍保留。证据：`34-task5-reduced-motion-flash.png`、`35-task5-danger-lock.png`。
-- 结算语义 — **FAIL**：自然累计 5 次 Breaches 后，结算页正确显示 `Accuracy`、`Typing errors`、`Breaches`，且 `Reached level` 跨整行；但 `Breaches` 右侧仍出现一个可见空白网格单元，不满足“结算指标网格不得留空白单元”。证据：`36-task5-results.png`。
-- **UNVERIFIED**：浏览器控制环境的隔离求值上下文无法访问页面主世界中的 `window.__KEYSTRIKE_DEBUG__`，且其安全策略拒绝 `javascript:` URL，因此未执行强制冻结目标、特殊目标 10 秒保护/12 秒冷却、同级普通目标速度对比与强制越线；错误红边的短暂状态已观察到，但未用浏览器计时仪器确认精确 150ms。Chrome、Safari 和 Firefox 均未实际运行，不能由本次 Chromium 内核结果推断为通过。
+- 结算语义 — **PASS（修复后复验）**：在连接的 Chrome 中自然累计 5 次 Breaches 后，结算页正确显示 `Accuracy`、`Typing errors`、`Breaches` 和 `Reached level`；`Breaches` 与 `Reached level` 各自跨满整行，未再观察到右侧空白网格单元。证据：`37-task5-results-fixed.png`。
+- **UNVERIFIED**：浏览器控制环境的隔离求值上下文无法访问页面主世界中的 `window.__KEYSTRIKE_DEBUG__`，且其安全策略拒绝 `javascript:` URL，因此未执行强制冻结目标、特殊目标 10 秒保护/12 秒冷却、同级普通目标速度对比与强制越线；错误红边的短暂状态已观察到，但未用浏览器计时仪器确认精确 150ms。Chrome 的完整核心流程矩阵、Safari 和 Firefox 均未实际运行；本次 Chrome 仅完成结算布局单项复验，不能据此推断完整命名浏览器支持。
