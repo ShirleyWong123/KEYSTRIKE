@@ -101,7 +101,7 @@ export class AppShell {
     this.resultsDialog.hidden = snapshot.phase !== 'gameover';
     this.required('[data-countdown]').hidden = snapshot.phase !== 'countdown';
 
-    if (snapshot.phase === 'gameover') this.updateResults(snapshot);
+    if (snapshot.phase === 'gameover' && this.lastPhase !== 'gameover') this.updateResults(snapshot);
     if (snapshot.phase !== this.lastPhase) this.moveFocus(snapshot.phase);
     this.lastPhase = snapshot.phase;
   }

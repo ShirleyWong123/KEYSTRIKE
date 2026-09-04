@@ -250,6 +250,46 @@ describe('AppShell game screens', () => {
     expect(results.textContent).toContain('0%');
     expect(results.textContent).toContain('0 WPM');
   });
+
+  it('accesses high-score storage once per gameover entry', () => {
+    let highScoreReads = 0;
+    let highScoreWrites = 0;
+    const throwing = {
+      getItem: (storageKey: string) => {
+        if (storageKey.startsWith('keystrike.highScore.')) {
+          highScoreReads += 1;
+          throw new Error('blocked high-score read');
+        }
+        return null;
+      },
+      setItem: (storageKey: string) => {
+        if (storageKey.startsWith('keystrike.highScore.')) {
+          highScoreWrites += 1;
+          throw new Error('blocked high-score write');
+        }
+      },
+    } as unknown as Storage;
+    const root = document.createElement('main');
+    document.body.append(root);
+    const model = new GameModel();
+    const audio = { unlock: vi.fn(), setEnabled: vi.fn() } as unknown as AudioEngine;
+    const shell = new AppShell(root, model, audio, new StorageAdapter(throwing, false));
+
+    shell.update(resultSnapshot({ score: 1_000 }));
+    shell.update(resultSnapshot({ score: 1_000 }));
+    shell.update(resultSnapshot({ score: 1_000 }));
+
+    expect(highScoreReads).toBe(1);
+    expect(highScoreWrites).toBe(1);
+
+    shell.update(resultSnapshot({ phase: 'playing' }));
+    shell.update(resultSnapshot({ score: 1_500 }));
+
+    expect(highScoreReads).toBe(2);
+    expect(highScoreWrites).toBe(2);
+    expect(root.querySelector('[data-result="score"]')?.textContent).toBe('1,500');
+    expect(root.querySelector('[data-result="high-score"]')?.textContent).toBe('1,500');
+  });
 });
 
 describe('short-height layout', () => {
