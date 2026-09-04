@@ -165,6 +165,38 @@ describe('fixed-step browser runtime', () => {
     expect(shell.update).toHaveBeenCalled();
   });
 
+  it.each([
+    ['Alt', { altKey: true }],
+    ['Control', { ctrlKey: true }],
+    ['Meta', { metaKey: true }],
+  ] as const)('leaves %s+letter shortcuts to the browser', (_modifier, init) => {
+    const { frames, model, renderer, audio, shell } = createHarness();
+    const handleKey = vi.spyOn(model, 'handleKey');
+    const event = new KeyboardEvent('keydown', { key: 'p', cancelable: true, ...init });
+
+    frames.keyboardTarget.dispatchEvent(event);
+
+    expect(handleKey).not.toHaveBeenCalled();
+    expect(event.defaultPrevented).toBe(false);
+    expect(renderer.consume).not.toHaveBeenCalled();
+    expect(audio.consume).not.toHaveBeenCalled();
+    expect(shell.update).not.toHaveBeenCalled();
+  });
+
+  it('leaves repeated keys to the browser', () => {
+    const { frames, model, renderer, audio, shell } = createHarness();
+    const handleKey = vi.spyOn(model, 'handleKey');
+    const event = new KeyboardEvent('keydown', { key: 'p', repeat: true, cancelable: true });
+
+    frames.keyboardTarget.dispatchEvent(event);
+
+    expect(handleKey).not.toHaveBeenCalled();
+    expect(event.defaultPrevented).toBe(false);
+    expect(renderer.consume).not.toHaveBeenCalled();
+    expect(audio.consume).not.toHaveBeenCalled();
+    expect(shell.update).not.toHaveBeenCalled();
+  });
+
   it('auto-pauses a playing run when hidden or blurred', () => {
     const hidden = createHarness();
     hidden.frames.visibilityState = 'hidden';
@@ -190,6 +222,33 @@ describe('fixed-step browser runtime', () => {
     frames.keyboardTarget.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
     expect(renderer.resize).toHaveBeenCalledOnce();
     expect(model.snapshot().phase).toBe('playing');
+  });
+
+  it('keeps retained debug controls inert after disposal', () => {
+    const { runtime, model, renderer, audio, shell } = createHarness();
+    const debug = runtime.debug;
+    runtime.dispose();
+    const before = model.snapshot();
+
+    debug.injectTarget({
+      id: 92,
+      word: 'stale',
+      typed: 0,
+      x: 120,
+      y: 400,
+      width: 100,
+      height: 42,
+      speed: 0,
+      kind: 'normal',
+    });
+    debug.forceSpecial('repair');
+    debug.forceLevel(12);
+    debug.forceBreaches(1);
+
+    expect(debug.snapshot()).toEqual(before);
+    expect(renderer.consume).not.toHaveBeenCalled();
+    expect(audio.consume).not.toHaveBeenCalled();
+    expect(shell.update).not.toHaveBeenCalled();
   });
 
   it.each(['repair', 'pulse', 'freeze'] as const)(

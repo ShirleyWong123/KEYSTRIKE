@@ -119,6 +119,7 @@ export const createKeystrikeRuntime = (
 
   const onKeyDown = (rawEvent: Event): void => {
     if (disposed || rawEvent.defaultPrevented || !(rawEvent instanceof KeyboardEvent)) return;
+    if (rawEvent.repeat || rawEvent.altKey || rawEvent.ctrlKey || rawEvent.metaKey) return;
     const before = model.snapshot().phase;
     const isEscape = rawEvent.key === 'Escape' || rawEvent.key === 'Esc';
     const isGameplayLetter = before === 'playing' && /^[a-zA-Z]$/.test(rawEvent.key);
@@ -156,11 +157,12 @@ export const createKeystrikeRuntime = (
   const debug: KeystrikeDebugApi = Object.freeze({
     snapshot: () => model.snapshot(),
     injectTarget: (target: Target) => {
+      if (disposed) return;
       model.injectTarget(target);
       publish();
     },
     forceSpecial: (kind: Exclude<TargetKind, 'normal'>) => {
-      if (kind !== 'repair' && kind !== 'pulse' && kind !== 'freeze') return;
+      if (disposed || (kind !== 'repair' && kind !== 'pulse' && kind !== 'freeze')) return;
       const word = kind.toUpperCase();
       const width = Math.max(74, word.length * 10 + 36);
       model.injectTarget({
@@ -177,7 +179,7 @@ export const createKeystrikeRuntime = (
       publish();
     },
     forceBreaches: (requestedCount = 1) => {
-      if (model.snapshot().phase !== 'playing') return;
+      if (disposed || model.snapshot().phase !== 'playing') return;
       const count = Math.min(5, Math.max(1, Math.floor(requestedCount)));
       for (let index = 0; index < count; index += 1) {
         model.injectTarget({
@@ -196,6 +198,7 @@ export const createKeystrikeRuntime = (
       publish();
     },
     forceLevel: (level: number) => {
+      if (disposed) return;
       model.forceLevelForDebug(level);
       publish();
     },
