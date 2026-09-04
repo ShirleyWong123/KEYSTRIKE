@@ -5,11 +5,13 @@ import type { GameEvent, GameSettings, GameSnapshot, Target, TargetKind } from '
 const MAX_DPR = 2;
 const SHIP_X = CANVAS_WIDTH / 2;
 const SHIP_Y = 748;
-const ERROR_MS = 120;
+const ERROR_MS = 150;
 const IMPACT_MS = 120;
 const EXPLOSION_MS = 650;
+const AMBIENT_FLASH_MS = 120;
 const BREACH_MS = 500;
 const LEVEL_UP_MS = 900;
+const SECTOR_MILESTONE_MS = 1_200;
 const SPECIAL_PULSE_MS = 420;
 const MAX_SHOTS = 64;
 const MAX_IMPACTS = 32;
@@ -95,7 +97,9 @@ export class CanvasRenderer {
   private readonly specialPulses: SpecialPulse[] = [];
   private readonly knownTargets = new Map<number, Point>();
   private errorStartedAt = Number.NEGATIVE_INFINITY;
+  private ambientFlashStartedAt = Number.NEGATIVE_INFINITY;
   private levelUp: { level: number; startedAt: number } | null = null;
+  private sectorMilestone: { level: number; startedAt: number } | null = null;
   private presentationTime = 0;
   private lastWallTime: number | null = null;
   private lastRenderedPhase: GameSnapshot['phase'] | null = null;
@@ -146,7 +150,9 @@ export class CanvasRenderer {
     this.specialPulses.length = 0;
     this.knownTargets.clear();
     this.errorStartedAt = Number.NEGATIVE_INFINITY;
+    this.ambientFlashStartedAt = Number.NEGATIVE_INFINITY;
     this.levelUp = null;
+    this.sectorMilestone = null;
     this.presentationTime = 0;
     this.lastWallTime = null;
     this.lastRenderedPhase = null;
@@ -173,12 +179,18 @@ export class CanvasRenderer {
           break;
         case 'destroyed':
           this.addExplosion(targetCenter(event.target), currentTime);
+          if (currentTime - this.ambientFlashStartedAt > AMBIENT_FLASH_MS) {
+            this.ambientFlashStartedAt = currentTime;
+          }
           break;
         case 'breach':
           this.pushBounded(this.breaches, { ...targetCenter(event.target), startedAt: currentTime }, MAX_BREACHES);
           break;
         case 'level-up':
           this.levelUp = { level: event.level, startedAt: currentTime };
+          break;
+        case 'sector-milestone':
+          this.sectorMilestone = { level: event.level, startedAt: currentTime };
           break;
         case 'special':
           for (const targetId of event.affectedIds) {
@@ -220,6 +232,7 @@ export class CanvasRenderer {
     this.drawScanLines();
     this.drawPerspectiveGrid();
     this.drawDefenseLine(snapshot.shield);
+    this.drawThreatPulse(snapshot.targets, interpolation, frozen, snapshot.activeMs);
 
     const locked = snapshot.targets.find(({ id }) => id === snapshot.lockedTargetId);
     for (const target of snapshot.targets) {
@@ -234,6 +247,7 @@ export class CanvasRenderer {
     this.drawSpecialPulses(currentTime);
     this.drawShip();
     this.drawLevelIndicator(currentTime);
+    this.drawSectorMilestone(currentTime);
     this.drawEdgeWarning(currentTime);
     context.restore();
   }
@@ -291,6 +305,9 @@ export class CanvasRenderer {
     this.removeExpired(this.breaches, (effect) => currentTime - effect.startedAt <= BREACH_MS);
     this.removeExpired(this.specialPulses, (effect) => currentTime - effect.startedAt <= SPECIAL_PULSE_MS);
     if (this.levelUp && currentTime - this.levelUp.startedAt > LEVEL_UP_MS) this.levelUp = null;
+    if (this.sectorMilestone && currentTime - this.sectorMilestone.startedAt > SECTOR_MILESTONE_MS) {
+      this.sectorMilestone = null;
+    }
   }
 
   private finishProjectiles(currentTime: number): void {
@@ -390,6 +407,30 @@ export class CanvasRenderer {
     this.context.moveTo(12, DEFENSE_LINE);
     this.context.lineTo(CANVAS_WIDTH - 12, DEFENSE_LINE);
     this.context.stroke();
+    this.context.globalAlpha = 1;
+  }
+
+  private drawThreatPulse(
+    targets: readonly Target[],
+    interpolation: number,
+    frozen: boolean,
+    activeMs: number,
+  ): void {
+    const threat = targets
+      .filter((target) => {
+        const bottom = interpolatedTargetY(target, interpolation, frozen) + target.height;
+        return target.kind === 'normal' && bottom >= DEFENSE_LINE - 180 && bottom < DEFENSE_LINE;
+      })
+      .sort((left, right) => right.y - left.y || left.id - right.id)[0];
+    if (!threat) return;
+
+    const bottom = interpolatedTargetY(threat, interpolation, frozen) + threat.height;
+    const proximity = clamp((bottom - (DEFENSE_LINE - 180)) / 180, 0, 1);
+    const pulse = 0.5 + 0.5 * Math.sin(activeMs / 280);
+    this.context.strokeStyle = COLORS.red;
+    this.context.globalAlpha = 0.08 + proximity * (0.07 + pulse * 0.09);
+    this.context.lineWidth = 1.5 + proximity;
+    this.context.strokeRect(10, DEFENSE_LINE - 22, CANVAS_WIDTH - 20, 44);
     this.context.globalAlpha = 1;
   }
 
@@ -528,14 +569,9 @@ export class CanvasRenderer {
   }
 
   private drawExplosions(currentTime: number): void {
-    let flashOpacity = 0;
     for (const explosion of this.explosions) {
       const age = currentTime - explosion.startedAt;
       const progress = clamp(age / EXPLOSION_MS, 0, 1);
-      flashOpacity = Math.max(
-        flashOpacity,
-        (this.settings.reducedMotion ? 0.1 : 0.26) * Math.max(0, 1 - age / 120),
-      );
 
       this.context.strokeStyle = '#fff3d6';
       this.context.globalAlpha = 1 - progress;
@@ -574,9 +610,11 @@ export class CanvasRenderer {
       }
     }
 
-    if (flashOpacity > 0) {
+    const flashAge = currentTime - this.ambientFlashStartedAt;
+    if (flashAge >= 0 && flashAge <= AMBIENT_FLASH_MS) {
       this.context.fillStyle = '#ffffff';
-      this.context.globalAlpha = flashOpacity;
+      this.context.globalAlpha = (this.settings.reducedMotion ? 0.1 : 0.18)
+        * (1 - flashAge / AMBIENT_FLASH_MS);
       this.context.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
     }
     this.context.globalAlpha = 1;
@@ -626,7 +664,26 @@ export class CanvasRenderer {
     this.context.textBaseline = 'middle';
     this.context.shadowColor = COLORS.cyan;
     this.context.shadowBlur = 14;
-    this.context.fillText(`LEVEL ${this.levelUp.level}`, CANVAS_WIDTH / 2, CANVAS_HEIGHT * 0.42);
+    this.context.fillText(`LEVEL ${this.levelUp.level} // SPEED UP`, CANVAS_WIDTH / 2, CANVAS_HEIGHT * 0.42);
+    this.context.shadowBlur = 0;
+    this.context.globalAlpha = 1;
+  }
+
+  private drawSectorMilestone(currentTime: number): void {
+    if (!this.sectorMilestone) return;
+    const progress = clamp((currentTime - this.sectorMilestone.startedAt) / SECTOR_MILESTONE_MS, 0, 1);
+    this.context.fillStyle = COLORS.light;
+    this.context.globalAlpha = 1 - progress;
+    this.context.font = '800 20px "SFMono-Regular", Consolas, monospace';
+    this.context.textAlign = 'center';
+    this.context.textBaseline = 'middle';
+    this.context.shadowColor = COLORS.cyan;
+    this.context.shadowBlur = 10;
+    this.context.fillText(
+      `SECTOR ${this.sectorMilestone.level / 3} STABILIZED`,
+      CANVAS_WIDTH / 2,
+      CANVAS_HEIGHT * 0.47,
+    );
     this.context.shadowBlur = 0;
     this.context.globalAlpha = 1;
   }
