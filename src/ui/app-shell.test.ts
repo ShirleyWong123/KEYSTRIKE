@@ -33,6 +33,10 @@ const resultSnapshot = (overrides: Partial<GameSnapshot> = {}): GameSnapshot => 
   missedWords: 5,
   lockedTargetId: null,
   freezeRemainingMs: 0,
+  nextLevelRemainingMs: 45_000,
+  comboBrokenRemainingMs: 0,
+  specialHint: null,
+  specialHintRemainingMs: 0,
   targets: [],
   ...overrides,
 });

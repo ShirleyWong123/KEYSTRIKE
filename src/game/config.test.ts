@@ -47,7 +47,7 @@ describe('progression configuration', () => {
     expect(difficultyTuning('normal')).toEqual(difficultyTuning('easy'));
     expect(difficultyTuning('hard')).toMatchObject({ scoreMultiplier: 1.25, specialProtectionMs: 10_000, specialCooldownMs: 12_000, freezeMinimumLevel: 2 });
     expect(spawnIntervalFor('hard', 1)).toBe(2576);
-    expect(spawnIntervalFor('hard', 12)).toBe(1748);
+    expect(spawnIntervalFor('hard', 12)).toBe(1750);
   });
 
   it('calculates remaining level time and Ace scores', () => {
@@ -58,5 +58,7 @@ describe('progression configuration', () => {
     expect(scoreForCompletion(6, 1, 5, 'hard')).toBe(246);
     expect(scoreForCompletion(6, 1, 10, 'hard')).toBe(309);
     expect(scoreForCompletion(6, 1, 15, 'hard')).toBe(377);
+    expect(scoreForCompletion(6, 1, 5, 'easy')).toBe(188);
+    expect(scoreForCompletion(6, 1, 5, 'normal')).toBe(188);
   });
 });

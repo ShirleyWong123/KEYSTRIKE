@@ -33,7 +33,7 @@ export const difficultyTuning = (difficulty: Difficulty): DifficultyTuning => di
 
 export const spawnIntervalFor = (difficulty: Difficulty, level: number): number => {
   const base = (LEVELS[Math.min(LEVELS.length, Math.max(1, Math.floor(level))) - 1] ?? LEVELS[0]).spawnMs;
-  return difficulty === 'hard' ? Math.max(1_748, Math.round(base * 0.92)) : base;
+  return difficulty === 'hard' ? Math.max(1_750, Math.round(base * 0.92)) : base;
 };
 
 export const msUntilNextLevel = (activeMs: number): number | null => {
@@ -49,7 +49,9 @@ export const scoreForCompletion = (
   comboBefore: number,
   difficulty: Difficulty,
 ): number => {
-  const aceComboMultiplier = comboBefore >= 15 ? 1.15 : comboBefore >= 10 ? 1.10 : comboBefore >= 5 ? 1.05 : 1;
+  const aceComboMultiplier = difficulty === 'hard'
+    ? comboBefore >= 15 ? 1.15 : comboBefore >= 10 ? 1.10 : comboBefore >= 5 ? 1.05 : 1
+    : 1;
   return Math.round(
     length
     * 25

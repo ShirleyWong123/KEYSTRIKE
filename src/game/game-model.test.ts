@@ -369,6 +369,20 @@ describe('GameModel breaches', () => {
 });
 
 describe('GameModel progression', () => {
+  it('exposes the remaining active time to the next level', () => {
+    const model = new GameModel(new TargetManager(), { autoSpawn: false });
+    model.start(settings());
+    model.beginCombat();
+    for (const letter of model.snapshot().targets[0]!.word) model.handleKey(letter);
+    model.drainEvents();
+
+    expect(model.snapshot().nextLevelRemainingMs).toBe(45_000);
+    model.update(44_999);
+    expect(model.snapshot().nextLevelRemainingMs).toBe(1);
+    model.update(1);
+    expect(model.snapshot().nextLevelRemainingMs).toBe(45_000);
+  });
+
   it('derives level from active combat time rather than score and emits crossed level events', () => {
     const model = new GameModel(new TargetManager(), { autoSpawn: false });
     model.start(settings());
@@ -504,6 +518,32 @@ describe('GameModel freeze specials', () => {
 });
 
 describe('GameModel special spawning', () => {
+  it('shows each special hint once per run and expires it only during active gameplay', () => {
+    const model = specialSpawnModel([0.079, 0.67, 0.079, 0.67], false, 'hard');
+    model.forceLevelForDebug(2);
+    model.injectTarget(target({ id: 63, word: 'a', speed: 0 }));
+    model.injectTarget(target({ id: 64, word: 'b', speed: 0 }));
+    model.attemptSpawn();
+    expect(model.snapshot()).toMatchObject({ specialHint: 'freeze', specialHintRemainingMs: 1_600 });
+
+    model.pause();
+    model.update(1_600);
+    expect(model.snapshot()).toMatchObject({ specialHint: 'freeze', specialHintRemainingMs: 1_600 });
+    model.resume();
+    model.update(1_600);
+    expect(model.snapshot()).toMatchObject({ specialHint: null, specialHintRemainingMs: 0 });
+
+    model.restart();
+    model.beginCombat();
+    for (const letter of model.snapshot().targets[0]!.word) model.handleKey(letter);
+    model.drainEvents();
+    model.forceLevelForDebug(2);
+    model.injectTarget(target({ id: 65, word: 'a', speed: 0 }));
+    model.injectTarget(target({ id: 66, word: 'b', speed: 0 }));
+    model.attemptSpawn();
+    expect(model.snapshot()).toMatchObject({ specialHint: 'freeze', specialHintRemainingMs: 1_600 });
+  });
+
   it('creates normal spawn opportunities from active combat time', () => {
     const model = specialSpawnModel([], true);
 

@@ -57,7 +57,7 @@
   expect(difficultyTuning('normal')).toEqual(difficultyTuning('easy'));
   expect(difficultyTuning('hard')).toMatchObject({ scoreMultiplier: 1.25, specialProtectionMs: 10_000, specialCooldownMs: 12_000, freezeMinimumLevel: 2 });
   expect(spawnIntervalFor('hard', 1)).toBe(2576);
-  expect(spawnIntervalFor('hard', 12)).toBe(1748);
+  expect(spawnIntervalFor('hard', 12)).toBe(1750);
   expect(msUntilNextLevel(44_999)).toBe(1);
   expect(msUntilNextLevel(45_000)).toBe(45_000);
   expect(msUntilNextLevel(540_000)).toBeNull();
